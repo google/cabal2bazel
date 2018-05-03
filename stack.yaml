@@ -1,0 +1,6 @@
+resolver: lts-9.21
+
+packages:
+- .
+extra-deps:
+- FindBin-0.0.5

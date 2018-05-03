@@ -1,0 +1,9 @@
+syntax = "proto2";
+
+import "tools/build_defs/haskell/tests/proto/foo.proto";
+
+package bar;
+
+message Bar {
+  optional foo.Foo foo = 1;
+}

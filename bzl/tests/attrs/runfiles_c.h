@@ -1,0 +1,6 @@
+#ifndef TOOLS_BUILD_DEFS_HASKELL_TESTS_ATTRS_RUNFILES_C_H_
+#define TOOLS_BUILD_DEFS_HASKELL_TESTS_ATTRS_RUNFILES_C_H_
+
+// Dummy file to test runfiles propagating from deps
+
+#endif  // TOOLS_BUILD_DEFS_HASKELL_TESTS_ATTRS_RUNFILES_C_H_
