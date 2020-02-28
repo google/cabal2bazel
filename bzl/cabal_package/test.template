@@ -1,0 +1,21 @@
+#!/bin/bash
+#
+# A wrapper script for running a third-party test similarly to how
+# it would be run under Cabal.
+
+set -ueo pipefail
+
+# A directory which contains all source files and is also writeable.
+WORKING_DIR="${TEST_TMPDIR}"/working-dir
+
+cp -R "${TEST_SRCDIR}"/{WORKSPACE}/"%{extra_srcs_dir}" "${WORKING_DIR}"
+chmod -R +w "${WORKING_DIR}"
+cd "${WORKING_DIR}"
+
+# Set the base library's default encoding via the LANG variable.
+# By default, System.IO checks LANG to determine the input/output
+# encoding of non-binary handles.
+# Several Haskell packages expect UTF-8 for their tests.
+exec env \
+    LANG=en_US.UTF-8 \
+    "${TEST_SRCDIR}"/{WORKSPACE}/"%{binary}" "${@:1}"

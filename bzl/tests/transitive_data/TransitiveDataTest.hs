@@ -1,10 +1,10 @@
--- Copyright 2018 Google LLC
+-- Copyright 2020 Google LLC
 --
 -- Licensed under the Apache License, Version 2.0 (the "License");
 -- you may not use this file except in compliance with the License.
 -- You may obtain a copy of the License at
 --
---    https://www.apache.org/licenses/LICENSE-2.0
+--      http://www.apache.org/licenses/LICENSE-2.0
 --
 -- Unless required by applicable law or agreed to in writing, software
 -- distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,13 +14,13 @@
 
 module Main where
 
-import Control.Exception (assert)
-import System.FilePath ((</>))
-import qualified Paths_foo
+import Control.Monad (when)
+import Provider (readFoo, readCcData)
 
 main = do
-    fooDir <- Paths_foo.getDataDir
-    fooContents <- readFile (fooDir </> "foo.txt")
-    assert (fooContents == "foo\n") (pure ())
-    ccDataContents <- readFile (fooDir </> "cc_data.txt")
-    assert (ccDataContents == "cc data\n") (pure ())
+    fooContents <- readFoo
+    when (fooContents /= "foo\n") $
+        error $ "Unexpected fooContents: " ++ show fooContents
+    ccDataContents <- readCcData
+    when (ccDataContents /= "cc data\n") $
+        error $ "Unexpected ccDataContents: " ++ show ccDataContents

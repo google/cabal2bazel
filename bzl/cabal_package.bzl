@@ -1,10 +1,10 @@
-# Copyright 2018 Google LLC
+# Copyright 2020 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#    https://www.apache.org/licenses/LICENSE-2.0
+#      http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,462 +18,674 @@ To see all of the generated rules, run:
 bazel query --output=build //third_party/haskell/{package}/v{version}:all
 """
 
-load("@bazel_skylib//:lib.bzl", "collections")
-load("//bzl:def.bzl", "haskell_library", "haskell_binary", "haskell_test")
-load("//bzl:cabal_paths.bzl", "cabal_paths")
+load("@bazel_skylib//lib:collections.bzl", "collections")
+load("@bazel_skylib//lib:dicts.bzl", "dicts")
+load("@bazel_skylib//lib:paths.bzl", "paths")
+load("//third_party/haskell/alex:build_defs.bzl", "genalex")
+load("//third_party/haskell/ghc:versions.bzl", "select_by_ghc_version")
+load("//third_party/haskell/happy:build_defs.bzl", "genhappy")
+load("//bzl/cabal_package:cabal_paths.bzl", "cabal_paths")
+load("//bzl/cabal_package:overrides.bzl", "common_package_overrides")
+load("//bzl/private:action.bzl", "multi_action")
+load("//bzl:binary_with_runfiles.bzl", "binary_runfiles")
+load(
+    "//bzl:def.bzl",
+    "haskell_binary",
+    "haskell_library",
+)
 load("//bzl:hsc2hs.bzl", "hsc2hs")
-load("//bzl:metadata.bzl", "package_key")
-load("//bzl:providers.bzl", "forward_deps")
-load("//bzl:hackage.bzl", "hackage")
-load("//bzl:happy.bzl", "genhappy")
-load("//bzl:alex.bzl", "genalex")
-
-# A list of default packages which are provided by
-# //third_party/haskell/ghc/... rather than //third_party/haskell/{package}.
-# Note that this is redundant to
-# //third_party/haskell/ghc:default-packages; however, the contents of that
-# file aren't available during Skylark macros (or rule analysis).
-_default_packages = [
-    "Cabal",
-    "array",
-    "base",
-    "binary",
-    "bytestring",
-    "containers",
-    "deepseq",
-    "directory",
-    "filepath",
-    "ghc",
-    "ghc-boot",
-    "ghc-boot-th",
-    "ghc-prim",
-    "ghci",
-    "haskeline",
-    "hoopl",
-    "hpc",
-    "integer-gmp",
-    "pretty",
-    "process",
-    "template-haskell",
-    "terminfo",
-    "time",
-    "transformers",
-    "unix",
-]
+load("@bazel_skylib//rules:build_test.bzl", "build_test")
 
 _conditions_default = "//conditions:default"
 
-# A list of default packages which are hidden by default.
-_hidden_default_packages = ["ghc"]
-
-# Extra GHC arguments to undo the google3 defaults which might otherwise break
+# Extra GHC arguments to undo the defaults which might otherwise break
 # some Cabal packages.
 _undo_default_options = [
     "-XForeignFunctionInterface",
     "-XNoScopedTypeVariables",
-]
-_ignored_extensions = [
-    # Deprecated in July 2014: https://ghc.haskell.org/trac/ghc/ticket/9242#comment:28
-    "OverlappingInstances",
-]
-
-# cabal_haskell_library is a build rule which is a thin wrapper around
-# haskell_library, tagging it with a version number.
-# Usage:
-#   haskell_library(
-#       name = "foo-lib",
-#       ...,
-#   )
-#   cabal_haskell_library(
-#       name = "foo",
-#       version = "1.2.3",
-#   )
-#   # Forward a library, in particular used for version-agnostic libraries.
-#   # Automaticaly picks up the version number from the "library" attribute.
-#   cabal_haskell_library(
-#      library = ":foo-forwarded",
-#   )
-def _impl_cabal_haskell_library(ctx):
-  if ctx.attr.version:
-    cabal_id = struct(
-        name=ctx.label.name,
-        version=ctx.attr.version)
-  else:
-    cabal_id = ctx.attr.library.haskell_cabal_id
-
-  return forward_deps(
-      ctx,
-      ctx.attr.deps,
-      {"haskell_cabal_id": cabal_id})
-
-_cabal_haskell_library = rule(
-    implementation=_impl_cabal_haskell_library,
-    attrs={
-        "deps": attr.label_list(),
-        "library": attr.label(),
-        "version": attr.string(),
-    },
-)
-
-def cabal_haskell_library(name, library, version=""):
-  # We want cabal_haskell_library to accept only one dependency, the library
-  # that it is forwarding, so we use a single label attr called "library"
-  # instead of "deps". However, bazel treats "deps" specially when finding
-  # transitive data dependencies and if we don't include the "library"
-  # dependency in a "deps" attribute, we must manually forward all data
-  # dependencies. To avoid that, we include a "deps" attr and use this macro to
-  # enforce that "deps == [library]".
-  _cabal_haskell_library(
-      name=name,
-      deps=[library],
-      library=library,
-      version=version,
-  )
-
-# Cabal macro generation target name ends with this.
-_macros_suffix = "-macros"
-
-# The _cabal_haskell_macros rule generates a file containing Cabal
-# MIN_VERSION_* macros of all of the specified dependencies, as well as some
-# other Cabal macros.
-# For more details, see //bzl/cabal/GenerateCabalMacros.hs.
-# Args:
-#   deps: A list of cabal_haskell_library rules.
-#   default_packages: A list of names of default packages that
-#     this package depends on; e.g., "base".
-def _impl_cabal_haskell_macros(ctx):
-  if not ctx.label.name.endswith(_macros_suffix):
-    fail("Macros target ends with unexpected suffix.")
-  ctx.action(
-      outputs=[ctx.outputs.out],
-      inputs=[ctx.file._default_packages_file, ctx.executable._gen_cabal_macros],
-      progress_message="Generating Haskell Cabal macros for %s" % str(ctx.label),
-      mnemonic="HaskellGenerateCabalMacros",
-      command=(
-          " ".join(
-              [ctx.executable._gen_cabal_macros.path,
-               # Ideally the package key would be passed in as an attribute, but
-               # caller of the 'cabal_haskell_macros' rule (ultimately
-               # 'cabal_haskell_package') is not (yet) a proper rule, so can't
-               # access the ctx (and so the Bazel package) from there.
-               #
-               # Therefore resorting to the hack of removing the "-macros"
-               # suffix added by the callsite of this rule.
-               package_key(ctx, ctx.label.name[:-len(_macros_suffix)]),
-               ctx.file._default_packages_file.path,
-              ] + ctx.attr.default_packages
-              + [p.haskell_cabal_id.name + "-"
-                 + p.haskell_cabal_id.version
-                 for p in ctx.attr.deps])
-          + " > " + ctx.outputs.out.path),
-  )
-
-_cabal_haskell_macros = rule(
-    implementation=_impl_cabal_haskell_macros,
-    attrs={
-        "deps": attr.label_list(providers=["haskell_cabal_id"]),
-        "default_packages": attr.string_list(),
-        "_default_packages_file": attr.label(
-            single_file=True,
-            default=Label("//third_party/haskell/ghc:default_packages"),
-        ),
-        "_gen_cabal_macros": attr.label(
-            executable=True,
-            cfg="host",
-            default=Label("//bzl/cabal:GenerateCabalMacros"),
-        ),
-    },
-    outputs={"out": "%{name}.h"},
-)
+    "-no-haddock",
+] + select_by_ghc_version({
+    "8.6": ["-XStarIsType"],
+    "8.4": [],
+})
 
 def _paths_module(desc):
-  return "Paths_" + desc.package.pkgName.replace("-","_")
+    return "Paths_" + desc.package.pkgName.replace("-", "_")
 
-def _glob_modules(src_dir, extension):
-  """List Haskell files under the given directory with this extension.
+def _glob_modules(src_dirs):
+    """List Haskell files under the given directory.
 
-  Args:
-    src_dir: A subdirectory relative to this package.
-    extension: A file extension; for example, ".hs" or ".hsc".
-  Returns:
-    A list of 3-tuples containing:
-      1. The original file, e.g., "srcs/Foo/Bar.hsc"
-      2. The Haskell module name, e.g., "Foo.Bar"
-      3. The preprocessed Haskell file name, e.g., "Foo/Bar.hs"
-  """
-  outputs = []
-  for f in native.glob([src_dir + "**/*" + extension]):
-    m = f[len(src_dir):-len(extension)]
-    outputs += [(f, m.replace("/", "."), m + ".hs")]
-  return outputs
+    Args:
+      src_dirs: A list of subdirectories relative to this package.
+
+    Returns:
+      A dict mapping pairs of modules and extensions to source files.
+    """
+    outputs = {}
+    for src_dir in src_dirs:
+        for f in native.glob([_prefix_dir_base(src_dir) + "**/*"]):
+            base, extension = paths.split_extension(f)
+            if extension.startswith("."):
+                module = paths.relativize(base, src_dir).replace("/", ".")
+                if (module, extension) not in outputs:
+                    outputs[(module, extension[1:])] = f
+    return outputs
 
 def _conditions_dict(d):
-  return d.select if hasattr(d, "select") else {_conditions_default: d}
+    return getattr(d, "select", {_conditions_default: d})
 
-def _get_build_attrs(name, build_info, desc, generated_srcs_dir, extra_modules, cc_deps=[], version_overrides=None, ghcopts=[]):
-  """Get the attributes for a particular library or binary rule.
+def _get_extra_src_files(desc):
+    """Returns paths with DOS separator \\ replaced by /."""
+    return [path.replace("\\", "/") for path in desc.extraSrcFiles]
 
-  Args:
-    name: The name of this component.
-    build_info: A struct of the Cabal BuildInfo for this component.
-    desc: A struct of the Cabal PackageDescription for this package.
-    generated_srcs_dir: Location of autogenerated files for this rule,
-      e.g., "dist/build" for libraries.
-    extra_modules: exposed-modules: or other-modules: in the package description
-    cc_deps: External cc_libraries that this rule should depend on.
-    version_overrides: Override the default version of specific dependencies;
-      see cabal_haskell_package for more details.
-    ghcopts: Extra GHC options.
-  Returns:
-    A dictionary of attributes (e.g. "srcs", "deps") that can be passed
-    into a haskell_library or haskell_binary rule.
-  """
+def _generate_module(component_name, module_map, module, cbits, tags):
+    """Creates a build rule to generate the given module.
 
-  # Preprocess and collect all the source files by their extension.
-  # module_map will contain a dictionary from module names ("Foo.Bar")
-  # to the preprocessed source file ("src/Foo/Bar.hs").
-  module_map = {}
+    If the source file (e.g. .hs) already exists, it just returns it.
 
-  for d in build_info.hsSourceDirs + [generated_srcs_dir]:
-    base = _prefix_dir_base(d)
-    for f,m,_ in _glob_modules(base, ".hsc"):
-      module_map[m] = f[:-4] + ".hs"
-      hsc2hs(
-          name = "hsc2hs_" + f,
-          src = f,
-          deps = [":" + name + "-cbits"],
-      )
-    for f,m,out in _glob_modules(base, ".x"):
-      module_map[m] = out
-      genalex(
-          src = f,
-          out = out,
-      )
-    for f,m,out in _glob_modules(base, ".y") + _glob_modules(base, ".ly"):
-      module_map[m] = out
-      genhappy(
-          src = f,
-          out = out,
-      )
-    # Raw source files.  Include them last, to override duplicates (e.g. if a
-    # package contains both a Happy Foo.y file and the corresponding generated
-    # Foo.hs).
-    for f,m,_ in _glob_modules(base, ".hs") + _glob_modules(base, ".lhs"):
-      module_map[m] = f
+    Each generated source file is given a suffix to make it unique for each component
+    (library, executable, test).  This avoids having duplicate rules
+    when the same module is specified for multiple components.
 
-  # Collect the source files for each module in this Cabal component.
-  # srcs is a mapping from "select()" conditions (e.g. //third_party/haskell/ghc:ghc-8.0.2) to a list of source files.
-  # Turn "boot_srcs" and others to dicts if there is a use case.
-  srcs = {}
-  # Keep track of .hs-boot files specially.  GHC doesn't want us to pass
-  # them as command-line arguments; instead, it looks for them next to the
-  # corresponding .hs files.
-  boot_srcs = []
-  deps = {}
-  paths_module = _paths_module(desc)
-  extra_modules_dict = _conditions_dict(extra_modules)
-  other_modules_dict = _conditions_dict(build_info.otherModules)
-  for condition in depset(extra_modules_dict.keys() + other_modules_dict.keys()):
-    srcs[condition] = []
-    deps[condition] = []
-    for m in (extra_modules_dict.get(condition, []) +
-              other_modules_dict.get(condition, [])):
-      if m == paths_module:
-        deps[condition] += [":" + paths_module]
-      elif m in module_map:
-        srcs[condition] += [module_map[m]]
-        # Get ".hs-boot" and ".lhs-boot" files.
-        boot_srcs += native.glob([module_map[m] + "-boot"])
-      else:
-        fail("Missing module %s for %s" % (m, name))
+    Args:
+      component_name: A string used to uniqify the generated rule
+      module_map: A dict from a pair of (module name, extension)
+        to filenames.
+      module: The name of the module to generate.
+      cbits: The cc_library rule for this target.
+      tags: Tags to set on the generated build rule.
+    """
+    rule_name = "_gen_" + component_name + "_" + module
+    out_hs = "_gen_" + component_name + "/" + module.replace(".", "/") + ".hs"
 
-  # Collect the options to pass to ghc.
-  extra_ghcopts = ghcopts
-  ghcopts = _undo_default_options
-  all_extensions = [ ext for ext in
-                     ([build_info.defaultLanguage]
-                      if build_info.defaultLanguage else ["Haskell98"])
-                     + build_info.defaultExtensions
-                     + build_info.oldExtensions ]
-  for ext in _ignored_extensions:
-    if ext in all_extensions:
-      print("GHC Extension %s has been ignored when building %s." % (ext, name))
-  ghcopts = ghcopts + ["-X" + ext for ext in all_extensions
-                       if ext not in _ignored_extensions ]
+    f = module_map.get((module, "hs"))
+    if f:
+        return f
 
-  ghcopt_blacklist = ["-Wall","-Wwarn","-w","-Werror"]
-  for (compiler,opts) in build_info.options:
-    if compiler == "ghc":
-      ghcopts += [o for o in opts if o not in ghcopt_blacklist]
-  ghcopts += ["-w", "-Wwarn"]  # -w doesn't kill all warnings...
+    f = module_map.get((module, "lhs"))
+    if f:
+        return f
 
-  # Collect the dependencies.
-  default_packages = []
-  explicit_deps_idx = len(deps[_conditions_default])
-  for condition, ps in _conditions_dict(build_info.targetBuildDepends).items():
-    if condition not in deps:
-      deps[condition] = []
-    for p in ps:
-      if p.name in _default_packages:
-        if p.name in _hidden_default_packages:
-          ghcopts += ["-package", p.name]
-        if p.name not in default_packages:
-          default_packages.append(p.name)
-      elif p.name == desc.package.pkgName:
-        # Allow executables to depend on the library in the same package.
-        deps[condition] += [":" + p.name]
-      elif version_overrides and p.name in version_overrides:
-        deps[condition] += [
-            "//third_party/haskell/" + p.name.replace("-","_")
-            + "/v" + version_overrides[p.name].replace(".", "_")
-            + ":" + p.name]
-      else:
-        deps[condition] += [hackage(p.name)]
+    # A tag to tell build_cleaner what module is being generated, despite the
+    # uniquified filename.
+    generated_tags = tags + ["haskell_generated_module=" + module]
 
-  # Generate the macros for these dependencies.
-  # TODO: Maybe remove the MIN_VERSION_<package> macro generation,
-  #   since GHC 8 itself (not Cabal) generates these. But not the
-  #   CURRENT_PACKAGE_KEY macro?
-  #   See https://ghc.haskell.org/trac/ghc/ticket/10970.
-  _cabal_haskell_macros(
-      name = name + _macros_suffix,
-      deps = deps[_conditions_default][explicit_deps_idx:],
-      default_packages = default_packages,
-  )
-  ghcopts += ["-optP-include", "-optP$(location :%s)" % (name + _macros_suffix)]
+    # hsc2hs
+    f = module_map.get((module, "hsc"))
+    if f:
+        hsc2hs(
+            name = rule_name,
+            src = f,
+            out = out_hs,
+            deps = [cbits],
+            tags = generated_tags,
+        )
+        return out_hs
 
-  ghcopts += ["-optP" + o for o in build_info.cppOptions]
+    # Alex
+    f = module_map.get((module, "x"))
+    if f:
+        genalex(
+            src = f,
+            out = out_hs,
+            tags = generated_tags,
+        )
+        return out_hs
 
-  # Generate a cc_library for this package.
-  # TODO(judahjacobson): don't create the rule if it's not needed.
-  # TODO(judahjacobson): Figure out the corner case logic for some packages.
-  # In particular: JuicyPixels, cmark, ieee754.
-  install_includes = native.glob(
-      [_prefix_dir(d, f) for d in build_info.includeDirs
-       for f in build_info.installIncludes])
-  headers = depset(
-      [f for f in native.glob(desc.extraSrcFiles) if f.endswith(".h")] + install_includes)
-  ghcopts += ["-I" + native.package_name() + "/" + d for d in build_info.includeDirs]
-  lib_name = name + "-cbits"
-  for xs in deps.values():
-    xs.append(":" + lib_name)
-  native.cc_library(
-      name = lib_name,
-      srcs = build_info.cSources,
-      includes = build_info.includeDirs,
-      copts = ([o for o in build_info.ccOptions if not o.startswith("-D")]
-               + ["-w"]),
-      defines = [o[2:] for o in build_info.ccOptions if o.startswith("-D")],
-      textual_hdrs = list(headers),
-      deps = ["//third_party/haskell/ghc:headers"] + cc_deps,
-  )
+    # Happy
+    f = module_map.get((module, "y"))
+    if not f:
+        f = module_map.get((module, "ly"))
+    if f:
+        genhappy(
+            src = f,
+            out = out_hs,
+            tags = generated_tags,
+        )
+        return out_hs
 
-  if boot_srcs:
-    ghcopts += ["-i" + native.package_name() + "/" + d for d in build_info.hsSourceDirs]
+    fail("Missing module %s for %s" % (module, component_name))
 
-  return {
-      "srcs": srcs,
-      "deps": deps,
-      "ghcopts": ghcopts + extra_ghcopts,
-      "extra_src_files": [":" + name + _macros_suffix] + collections.uniq(
-          boot_srcs + install_includes + native.glob(desc.extraSrcFiles)),
-  }
+def _get_build_attrs(
+        name,
+        build_info,
+        desc,
+        generated_srcs_dir,
+        extra_modules,
+        module_path = None,
+        cc_deps = [],
+        package_overrides = None,
+        ghcopts = [],
+        tags = []):
+    """Get the attributes for a particular library or binary rule.
+
+    Args:
+      name: The name of this component.
+      build_info: A struct of the Cabal BuildInfo for this component.
+      desc: A struct of the Cabal PackageDescription for this package.
+      generated_srcs_dir: Location of autogenerated files for this rule,
+        e.g., "dist/build" for libraries.
+      extra_modules: exposed-modules: or other-modules: in the package description
+      module_path: The main file or module, if this rule will produce a binary.
+      cc_deps: External cc_libraries that this rule should depend on.
+      package_overrides: Override the default location of specific dependencies;
+        see cabal_haskell_package for more details.
+      ghcopts: Extra GHC options.
+      tags: Tags to set on every generated target.
+
+    Returns:
+      A dictionary of attributes (e.g. "srcs", "deps") that can be passed
+      into a haskell_library or haskell_binary rule.
+    """
+
+    # Collect all the source files by their extension.
+    # module_map will contain a dictionary from module names ("Foo.Bar")
+    # and extensions to the original source file ("src/Foo/Bar.hsc").
+    module_map = _glob_modules(build_info.hsSourceDirs + [generated_srcs_dir])
+
+    # Keep track of which modules have been generated for this target, in case
+    # we generate the same file for multiple conditions.
+    # Maps module names to the target.
+    generated_modules = dict()
+
+    # Collect the source files for each module in this Cabal component.
+    # srcs is a mapping from "select()" conditions (e.g. //third_party/haskell/ghc:ghc-8.0.2) to a list of source files.
+    srcs = {}
+
+    # Keep track of .hs-boot files specially.  GHC doesn't want us to pass
+    # them as command-line arguments; instead, it looks for them next to the
+    # corresponding .hs files.
+    paths_module = _paths_module(desc)
+    extra_modules_dict = _conditions_dict(extra_modules)
+    other_modules_dict = _conditions_dict(build_info.otherModules)
+
+    cbits_target = name + "-cbits"
+
+    # Track the runtime deps for any Paths_ modules we're using.
+    # Use a separate dictionary since the select() keys for the main
+    # package dependencies may be different.
+    runtime_deps = {}
+    for condition in depset(extra_modules_dict.keys() + other_modules_dict.keys()).to_list():
+        srcs[condition] = []
+        runtime_deps[condition] = []
+        for module in (extra_modules_dict.get(condition, []) +
+                       other_modules_dict.get(condition, [])):
+            if module == paths_module:
+                runtime_deps[condition].append(
+                    "//bzl/cabal_package:PathDeps",
+                )
+                srcs[condition] += [":" + paths_module]
+            elif module in generated_modules:
+                srcs[condition] += generated_modules[module]
+            else:
+                # Generate a file for this module:
+                fs = [_generate_module(name, module_map, module, cbits_target, tags)]
+
+                # Also add boot files, if any:
+                if (module, "hs-boot") in module_map:
+                    fs += [module_map[(module, "hs-boot")]]
+                elif (module, "lhs-boot") in module_map:
+                    fs += [module_map[(module, "lhs-boot")]]
+                srcs[condition] += fs
+                generated_modules[module] = fs
+
+    # Collect the options to pass to ghc.
+    extra_ghcopts = ghcopts
+    ghcopts = []
+    ghcopts += _undo_default_options
+    ghcopts += [
+        "-X" + ext
+        for ext in ([build_info.defaultLanguage] if build_info.defaultLanguage else ["Haskell98"]) +
+                   build_info.defaultExtensions +
+                   build_info.oldExtensions
+    ]
+
+    threaded = False
+    ghcopt_blacklist = ["-Wall", "-Wwarn", "-w", "-Werror", "-O", "-O2"]
+    for (compiler, opts) in build_info.options:
+        if compiler == "ghc":
+            ghcopts += [o for o in opts if o not in ghcopt_blacklist]
+            if "-threaded" in opts:
+                threaded = True
+    ghcopts += ["-w", "-Wwarn"]  # -w doesn't kill all warnings...
+
+    # Collect the dependencies.
+    deps = {}
+    for condition, ps in _conditions_dict(build_info.targetBuildDepends).items():
+        deps[condition] = []
+        for p in ps:
+            if p.name == desc.package.pkgName:
+                # Allow executables to depend on the library in the same package.
+                deps[condition] += [":" + _fix_rule_name(p.name)]
+            elif p.name in package_overrides:
+                deps[condition] += [package_overrides[p.name]]
+            else:
+                deps[condition] += ["//third_party/haskell/" + _fix_rule_name(p.name)]
+
+    ghcopts += ["-optP" + o for o in build_info.cppOptions]
+
+    # Generate a cc_library for this package.
+    # TODO(judahjacobson): don't create the rule if it's not needed.
+    install_includes = native.glob(
+        [
+            _prefix_dir(d, f)
+            for d in build_info.includeDirs
+            for f in build_info.installIncludes
+        ],
+    )
+    headers = depset(
+        [f for f in native.glob(_get_extra_src_files(desc))] + install_includes,
+    )
+    ghcopts += ["-I" + native.package_name() + "/" + d for d in build_info.includeDirs]
+    lib_name = name + "-cbits"
+    for xs in deps.values():
+        xs.append(":" + lib_name)
+    native.cc_library(
+        name = lib_name,
+        srcs = build_info.cSources,
+        includes = build_info.includeDirs,
+        copts = ([o for o in build_info.ccOptions if not o.startswith("-D")] +
+                 ["-w"]),
+        defines = [o[2:] for o in build_info.ccOptions if o.startswith("-D")],
+        textual_hdrs = headers.to_list(),
+        deps = ["//third_party/haskell/ghc:headers"] + cc_deps,
+        tags = tags,
+    )
+
+    if module_path:
+        [full_module_path] = native.glob(
+            [_prefix_dir(d, module_path) for d in build_info.hsSourceDirs],
+        )
+        for xs in srcs.values():
+            if full_module_path not in xs:
+                xs.append(full_module_path)
+
+    return dicts.add(
+        {
+            "srcs": select(srcs),
+            "deps": select(deps) + select(runtime_deps),
+            # We'll list any core packages explicitly in the deps:
+            "default_packages": [],
+            "ghcopts": ghcopts + extra_ghcopts,
+            "extra_src_files": collections.uniq(
+                install_includes +
+                native.glob(_get_extra_src_files(desc)),
+            ),
+            # Assume that this target uses TemplateHaskell or a similar
+            # functionality.  Alternately we could parse the files for
+            # LANGUAGE extensions, but it's not worth the added complexity.
+            "executes_deps_in_compile": True,
+            # Don't try to distinguish plugins from regular deps, since Cabal
+            # doesn't give us that information.  Note there's an open proposal:
+            # https://github.com/haskell/cabal/issues/2965
+            "allow_deps_as_plugins": True,
+        },
+        # Attributes that are only relevant for binaries or tests
+        {
+            # Include the "threaded" attribute, since some binaries don't work
+            # with our default (threaded=True)
+            "threaded": threaded,
+            # Don't enforce our internal conventions for third-party code:
+            "skip_module_name_check": True,
+        } if module_path else {},
+    )
 
 def _prefix_dir_base(d):
-  if d and d != ".":
-    if d.endswith("/"):
-      return d  # Skylark doesn't like consecutive slashes
+    normalized = paths.normalize(d)
+    if normalized == ".":
+        return ""
     else:
-      return d + "/"
-  else:
-    return ""
+        return normalized + "/"
 
 def _prefix_dir(dir_path, file_path):
-  """Prefix the file with the given directory, without extra "/"s."""
-  return _prefix_dir_base(dir_path) + file_path
+    """Prefix the file with the given directory, without extra "/"s."""
+    return _prefix_dir_base(dir_path) + file_path
 
-def cabal_haskell_package(description=None, cc_deps=[], data=[], version_overrides={}, name=None, cbits=True, ghcopts=[], **kwargs):
-  """Create rules for building a Cabal package.
+def _impl_haskell_thirdparty_test(ctx):
+    shell_file = ctx.actions.declare_file(ctx.label.name)
+    extra_srcs_label = ctx.attr.extra_srcs.label
 
-  Args:
-    description: A Skylark struct generated by cabal2build representing a
-      .cabal file's contents.
-    cc_deps: Additional google3 cc_library targets that this package should
-      depend on.
-    data: "data" for haskell_library.
-    version_overrides: Specify that this rule should use a non-default version
-      of some dependencies.  (NOTE: This should be avoided when possible; see
-      go/thirdpartyhaskell for details.)  A dictionary mapping string package
-      names to versions, e.g., {"haskell-src-exts": "1.16.0"}.
-    cbits: Whether to insert object files from lib<package>-cbits.a into the produced .a .
-    ghcopts: Extra GHC options.
-  """
-  name = description.package.pkgName
-
-  # TODO(judahjacobson): don't generate a Paths_ library unless it's needed.
-  cabal_paths(
-      name = _paths_module(description),
-      package = name.replace("-","_"),
-      version = [int(v) for v in description.package.pkgVersion.split(".")],
-      data_dir = description.dataDir,
-      data = native.glob([_prefix_dir(description.dataDir, d) for d in description.dataFiles]),
-  )
-
-  lib = description.library
-  if lib and lib.libBuildInfo.buildable:
-    lib_attrs = _get_build_attrs(name + "-lib", lib.libBuildInfo, description,
-                                 "dist/build",
-                                 lib.exposedModules,
-                                 cc_deps,
-                                 version_overrides=version_overrides,
-                                 ghcopts=ghcopts)
-    lib_name = name + "-lib"
-    srcs = lib_attrs.pop("srcs")
-    deps = lib_attrs.pop("deps")
-    haskell_library(
-        name = lib_name,
-        data = data,
-        srcs = select(srcs),
-        deps = select(deps),
-        extra_objs = [":" + name + "-lib-cbits"] if cbits else [],
-        **lib_attrs
+    ctx.actions.expand_template(
+        template = ctx.file._template,
+        output = shell_file,
+        substitutions = {
+            "%{binary}": ctx.executable.binary.short_path,
+            "%{extra_srcs_dir}": paths.join(extra_srcs_label.package, extra_srcs_label.name),
+        },
+    )
+    return DefaultInfo(
+        executable = shell_file,
+        runfiles = ctx.runfiles(
+            files = [ctx.executable.binary] + ctx.files.extra_srcs + ctx.files.runfiles,
+        ),
     )
 
-    cabal_haskell_library(
-        name=name,
-        library=":" + lib_name,
-        version = description.package.pkgVersion,
+_haskell_thirdparty_test = rule(
+    implementation = _impl_haskell_thirdparty_test,
+    test = True,
+    attrs = {
+        "binary": attr.label(executable = True, cfg = "target"),
+        "extra_srcs": attr.label(allow_files = True),
+        "runfiles": attr.label(allow_files = True),
+        "_template": attr.label(
+            allow_single_file = True,
+            default = Label("//bzl/cabal_package:test.template"),
+        ),
+    },
+)
+"""A wrapper test that sets up the environment for third-party Haskell tests."""
+
+def _impl_collect_srcs(ctx):
+    # Collect all srcs into a separate directory,
+    # keeping their relative directory structure.
+    srcs_dir = ctx.label.name
+    srcs = ctx.files.srcs
+    srcs_and_outs = [
+        (f, ctx.actions.declare_file(
+            paths.join(
+                srcs_dir,
+                paths.relativize(f.path, ctx.label.package),
+            ),
+        ))
+        for f in srcs
+    ]
+    src_outs = [g for (_, g) in srcs_and_outs]
+
+    # Copy them all in a single action with a single progress message,
+    # to avoid spamming the build output.
+    multi_action(
+        ctx,
+        inputs = depset(srcs),
+        progress_message = "Collecting source files for " + ctx.label.name,
+        outputs = src_outs,
+        # Just copy the files rather than soft-linking them.  Since they're
+        # source files, we don't expect them to be large.  And using "cp"
+        # avoids having to deal with relative paths for the soft link.
+        actions = [
+            struct(cmd = "/bin/cp", args = [f.path, g.path])
+            for (f, g) in srcs_and_outs
+        ],
     )
 
-  for exe in description.executables:
-    if not exe.buildInfo.buildable:
-      continue
-    exe_name = exe.exeName
-    # Avoid a name clash with the library.  For stability, make this logic
-    # independent of whether the package actually contains a library.
-    if exe_name == name:
-      exe_name = name + "_bin"
-    paths = _paths_module(description)
-    attrs = _get_build_attrs(exe_name, exe.buildInfo, description,
-                             "dist/build/%s/%s-tmp" % (name, name),
-                             # Some packages (e.g. happy) don't specify the
-                             # Paths_ module explicitly.
-                             [paths] if paths not in exe.buildInfo.otherModules
-                             else [],
-                             version_overrides=version_overrides,
-                             ghcopts=ghcopts)
-    srcs = attrs.pop("srcs")
-    deps = attrs.pop("deps")
+    return DefaultInfo(files = depset(src_outs))
 
-    [full_module_path] = native.glob(
-        [_prefix_dir(d, exe.modulePath) for d in exe.buildInfo.hsSourceDirs])
-    for xs in srcs.values():
-      if full_module_path not in xs:
-        xs.append(full_module_path)
+_collect_srcs = rule(
+    implementation = _impl_collect_srcs,
+    attrs = {"srcs": attr.label_list(allow_files = True)},
+)
+"""Collects all srcs in a separate directory."""
 
-    haskell_binary(
-        name = exe_name,
-        srcs = select(srcs),
-        deps = select(deps),
-        **attrs
+def _is_unimplementable_test(t):
+    """Whether we're not currently able to build this kind of test.
+
+    Some kinds of tests are hard to integrate with Bazel.  In particular:
+    if they rely on a custom Setup script that processes the source files.
+    Currently, we just skip them.
+
+    Args:
+      t: A test-suite
+
+    Returns:
+      A boolean.
+    """
+    for p in t.testBuildInfo.targetBuildDepends:
+        # Doctest rules rely on setup-depends: cabal-doctest. However, only
+        # blacklist the tests depending directly on "doctest".
+        if p.name in ["doctest"]:
+            return True
+    return False
+
+def _fix_rule_name(name):
+    return name.replace("-", "_")
+
+def _render_reexport(r):
+    return r.moduleReexportOriginalName + " as " + r.moduleReexportName
+
+def cabal_haskell_package(
+        description = None,
+        cc_deps = [],
+        data = [],
+        package_overrides = {},
+        cbits = True,
+        ghcopts = [],
+        test = True,
+        target_deps = {},
+        target_tags = {},
+        linkstatic = True,
+        disabled = False):
+    """Creates build rules for a Cabal package.
+
+    This macro is used by go/cabal2build, which generates (among other things):
+    - A package_description.bzl file that reifies the .cabal file
+      into a Starlark struct
+    - A BUILD file that calls cabal_haskell_package() with that struct.  The macro
+      will generate build rules for the libraries, binaries and tests that were
+      originally listed in the .cabal file.
+
+    For example:
+
+        load(":package_description.bzl", "description")
+        load(
+            "//bzl:cabal_package.bzl",
+            "cabal_haskell_package",
+        )
+        cabal_haskell_package(description = description)
+
+    For many Cabal packages, the default parameters of this macro are sufficient.
+    In other cases, you may want to customize that BUILD file by hand and add more
+    arguments to cabal_haskell_package. For example:
+
+        cabal_haskell_package(
+            description = description,
+            # Adds a cc_library dependency:
+            cc_deps = ["//third_party/zlib"],
+            # Prevents generating build rules for tests:
+            test = False,
+        )
+
+    Args:
+      description: A Skylark struct generated by cabal2build representing a
+        .cabal file's contents.
+      cc_deps: Additional cc_library targets that this package should
+        depend on.
+      data: "data" for haskell_library.
+      package_overrides: Specify that this rule should use a non-default location
+        of some dependencies.  (NOTE: This should be avoided when possible; see
+        go/thirdpartyhaskell for details.)  A dictionary mapping string package
+        names to labels; for example:
+        {"haskell-src-exts": "//third_party/haskell/haskell_src_exts/v1.16.0:haskell_src_exts"}.
+      cbits: Whether to insert object files from lib<package>-cbits.a into the produced .a .
+      ghcopts: Extra GHC options.
+      test: Whether to generate rules for this package's test-suites.
+        Defaults to True.
+      target_deps: A dict from names of targets to additional deps for them (list of labels).
+      target_tags: A dict from names of targets to additional tags for them (list of strings).
+      linkstatic: The value of the "linkstatic" attribute for each binary and test rule.
+      disabled: If true, tag every target as to prevent it from being built
+        automatically.  For example, this setting allows us to import packages and their
+        dependencies into Piper in separate, parallel CLs.
+    """
+
+    if disabled:
+        tags = [
+            "notap",  # Don't run on TAP.
+            "manual",  # Don't run with "bazel build {package}/..." or "{package}:all".
+            "no_grok",  # Don't index with Grok.
+            "nobuilder",  # Don't build with Tricorder.
+        ]
+    else:
+        tags = []
+
+    # Tell build_cleaner not to analyze these targets; it can't modify them.
+    tags += ["nofixdeps"]
+
+    # Include global overrides, such as haskell_core_library rules.
+    package_overrides = dicts.add(common_package_overrides, package_overrides)
+
+    name = description.package.pkgName
+
+    data = data + native.glob([_prefix_dir(description.dataDir, d) for d in description.dataFiles])
+
+    # TODO(judahjacobson): don't generate a Paths_ library unless it's needed.
+    cabal_paths(
+        name = _paths_module(description),
+        out = _paths_module(description) + ".hs",
+        package = name.replace("-", "_"),
+        version = [int(v) for v in description.package.pkgVersion.split(".")],
+        data_dir = description.dataDir,
+        tags = tags,
     )
+
+    lib = description.library
+    if lib and lib.libBuildInfo.buildable:
+        lib_attrs = _get_build_attrs(
+            name,
+            lib.libBuildInfo,
+            description,
+            "dist/build",
+            lib.exposedModules,
+            cc_deps = cc_deps,
+            package_overrides = package_overrides,
+            ghcopts = ghcopts,
+            tags = tags,
+        )
+        lib_deps = lib_attrs.pop("deps", []) + target_deps.get(name, [])
+
+        haskell_library(
+            name = _fix_rule_name(name),
+            cabal_name = name,
+            cabal_version = description.package.pkgVersion,
+            data = data,
+            deps = lib_deps,
+            tags = tags + ["haskell-exposed"] + target_tags.get(name, []),
+            hidden_modules = select(_conditions_dict(lib.libBuildInfo.otherModules)),
+            reexported_modules = [_render_reexport(r) for r in lib.reexportedModules] if hasattr(lib, "reexportedModules") else [],
+            **lib_attrs
+        )
+
+        build_test(
+            name = name + "_build_test",
+            targets = [":" + _fix_rule_name(name)],
+            tags = tags,
+        )
+
+    for exe in description.executables:
+        if not exe.buildInfo.buildable:
+            continue
+        exe_name = exe.exeName
+
+        # Avoid a name clash with the library.  For stability, make this logic
+        # independent of whether the package actually contains a library.
+        if exe_name == name:
+            exe_name = name + "_bin"
+        paths = _paths_module(description)
+        binary_tags = tags + target_tags.get(exe_name, [])
+        attrs = _get_build_attrs(
+            exe_name,
+            exe.buildInfo,
+            description,
+            "dist/build/%s/%s-tmp" % (name, name),
+            # Some packages (e.g. happy) don't specify the
+            # Paths_ module explicitly.
+            [paths] if paths not in exe.buildInfo.otherModules else [],
+            module_path = exe.modulePath,
+            package_overrides = package_overrides,
+            ghcopts = ghcopts,
+            tags = binary_tags,
+        )
+        exe_deps = attrs.pop("deps", []) + target_deps.get(exe_name, [])
+
+        haskell_binary(
+            name = _fix_rule_name(exe_name),
+            deps = exe_deps,
+            tags = binary_tags + ["haskell-exposed"],
+            data = data,
+            linkstatic = linkstatic,
+            **attrs
+        )
+
+    # Collect all "source" files, making them available to the tests.
+    # Most relevant tests only use extra-src-files, but a few tests
+    # (e.g., conduit, or tests using hedgehog) also look for the
+    # original source files.
+    # Note: *don't* collect data-files, since they're supposed to be
+    # accessed via runfiles (via the autogenerated Paths_* module)
+    # and we don't want the tests to circumvent that.
+    all_source_dirs = (
+        [
+            d
+            for exe in description.executables
+            for d in exe.buildInfo.hsSourceDirs
+        ] +
+        [
+            d
+            for t in description.testSuites
+            for d in t.testBuildInfo.hsSourceDirs
+        ] +
+        (description.library.libBuildInfo.hsSourceDirs if description.library else [])
+    )
+    _collect_srcs(
+        name = "collected_srcs",
+        srcs = native.glob(_get_extra_src_files(description) +
+                           [_prefix_dir(d, "**/*") for d in all_source_dirs]),
+    )
+
+    if test:
+        for t in description.testSuites:
+            if not t.testBuildInfo.buildable:
+                continue
+            interface = t.testInterface
+            test_name = t.testName
+
+            # We only support tests of type "exitcode-stdio-1.0".
+            # The only other type Cabal currently supports is "detailed-0.9",
+            # which isn't used by any of our packages.
+            if interface.type != "exitcode-stdio-1.0":
+                fail("Unrecognized test " + test_name + " of type: " + interface.type)
+
+            if _is_unimplementable_test(t):
+                continue
+
+            all_test_tags = tags + target_tags.get(test_name, [])
+            attrs = _get_build_attrs(
+                test_name,
+                t.testBuildInfo,
+                description,
+                "dist/build/%s/%s-tmp" % (test_name, test_name),
+                [],
+                module_path = interface.mainIs,
+                package_overrides = package_overrides,
+                ghcopts = ghcopts,
+                tags = all_test_tags,
+            )
+            test_deps = attrs.pop("deps", []) + target_deps.get(test_name, [])
+
+            # Wrap the test in a shell script that runs it with the
+            # environment that third-party packages expect.
+            test_binary_name = test_name + ".binary"
+            haskell_binary(
+                name = test_binary_name,
+                deps = test_deps,
+                tags = all_test_tags,
+                linkstatic = linkstatic,
+                testonly = True,
+                **attrs
+            )
+
+            test_binary_runfiles = test_binary_name + ".runfiles"
+            binary_runfiles(
+                name = test_binary_runfiles,
+                src = test_binary_name,
+                tags = all_test_tags,
+                testonly = True,
+            )
+
+            real_test_name = _fix_rule_name(test_name)
+            _haskell_thirdparty_test(
+                name = real_test_name,
+                binary = test_binary_name,
+                tags = all_test_tags,
+                extra_srcs = "collected_srcs",
+                runfiles = test_binary_runfiles,
+                timeout = "long",
+            )
