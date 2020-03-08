@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-""Genrule for the Alex scanner generator."""
+"""Genrule for the Alex scanner generator."""
 
 def genalex(src, out, **kwargs):
     """Runs the Alex lexer generator to create a Haskell source file.
