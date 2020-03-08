@@ -1,21 +1,29 @@
 load("//bzl:def.bzl", "haskell_library", "haskell_test")
 
-package(
-    features = ["haskell_strict_deps"],
-)
-
-# This was checking vardef Make variables which are not supported in bazel.
-FOO = "456"
-
 haskell_test(
     name = "GhcOptsTest",
     srcs = ["GhcOptsTest.hs"],
     ghcopts = [
         "-XCPP",
-        # Check that we tokenize the ghcopts, which should remove the "'"s.
-        "-D'ABC=123'",
-        "-DDEF=$(FOO)",
+        "-DABC=123",
+        "-DDEF=456",
     ],
+)
+
+# Test that we are passing linkopts when linking.
+# Set the number of capabilities
+haskell_test(
+    name = "LinkoptsTest",
+    srcs = ["LinkoptsTest.hs"],
+    linkopts = ["-with-rtsopts=-N2"],
+)
+
+# Test that we are passing RTS options at compile time.
+haskell_test(
+    name = "GhcRtsoptsTest",
+    srcs = ["GhcRtsoptsTest.hs"],
+    executes_deps_in_compile = True,
+    ghc_rtsopts = ["-N2"],  # Sets the number of capabilities
 )
 
 haskell_test(

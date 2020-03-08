@@ -1,0 +1,21 @@
+# Global bazelrc for Haskell rules.
+#
+# To use, add an import to ~/.bazelrc:
+#
+#    import %workspace%/tools/build_defs/haskell/bazelrc
+# TODO(judahjacobson): Switch this to build:haskell_check after publicizing
+# the --config=haskell_check way of doing things.
+build --strategy=HaskellCheck=local
+
+# --config=haskell_check is preferable to directly calling --output_groups:
+# - It gives you an error if you misspell "haskell_check"
+# - It hides the exact Bazel implementation from the user.
+build:haskell_check --output_groups=haskell_check
+
+# HaskellCheckModuleNames should also run locally, since each HaskellCheck
+# action depends on the HaskellCheckModuleNames of its deps.
+build:haskell_check --strategy=HaskellCheckModuleNames=local
+
+# Add flags so we can identify use of this file in Dremel queries.
+build --define=HASKELL_BLAZERC=1
+build:haskell_check --define=HASKELL_CHECK=1

@@ -3,10 +3,6 @@
 
 load("//bzl:def.bzl", "haskell_library", "haskell_test")
 
-package(
-    features = ["haskell_strict_deps"],
-)
-
 # A rule where the srcs correspond to the module hierarchy.
 haskell_library(
     name = "FooGroup",

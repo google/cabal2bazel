@@ -1,9 +1,5 @@
 load("//bzl:def.bzl", "haskell_proto_library", "haskell_test")
-load("//bzl:hackage.bzl", "hackage")
-
-package(
-    features = ["haskell_strict_deps"],
-)
+load("@bazel_skylib//rules:build_test.bzl", "build_test")
 
 proto_library(
     name = "foo_proto",
@@ -16,18 +12,37 @@ proto_library(
     deps = [":foo_proto"],
 )
 
+# A haskell_proto_library rule that depends (only) transitively on foo_proto.
 haskell_proto_library(
-    name = "bar_haskell_pb_lens",
-    api = "lens",
+    name = "bar_haskell_pb",
     deps = [":bar_proto"],
 )
 
 haskell_test(
-    name = "BarLensTest",
-    srcs = ["BarLensTest.hs"],
+    name = "BarTest",
+    srcs = ["BarTest.hs"],
     deps = [
-        ":bar_haskell_pb_lens",
-        #        hackage("data-default"),
+        ":bar_haskell_pb",
+        # TODO
+    ],
+)
+
+proto_library(
+    name = "bar_forwarded_proto",
+    deps = [":bar_proto"],
+)
+
+haskell_proto_library(
+    name = "bar_forwarded_haskell_pb",
+    deps = [":bar_forwarded_proto"],
+)
+
+haskell_test(
+    name = "BarForwardedTest",
+    srcs = ["BarTest.hs"],
+    deps = [
+        ":bar_forwarded_haskell_pb",
+        # TODO
     ],
 )
 
@@ -46,17 +61,16 @@ proto_library(
 )
 
 haskell_proto_library(
-    name = "generated_haskell_pb_lens",
-    api = "lens",
+    name = "generated_haskell_pb",
     deps = [":generated_proto"],
 )
 
 haskell_test(
-    name = "GeneratedLensTest",
-    srcs = ["GeneratedLensTest.hs"],
+    name = "GeneratedTest",
+    srcs = ["GeneratedTest.hs"],
     deps = [
-        ":generated_haskell_pb_lens",
-        #        hackage("data-default"),
+        ":generated_haskell_pb",
+        # TODO
     ],
 )
 
@@ -67,22 +81,21 @@ proto_library(
 )
 
 haskell_proto_library(
-    name = "sub_haskell_pb_lens",
-    api = "lens",
+    name = "sub_haskell_pb",
     deps = [":sub_proto"],
 )
 
 haskell_test(
-    name = "SubLensTest",
-    srcs = ["SubLensTest.hs"],
+    name = "SubTest",
+    srcs = ["SubTest.hs"],
     deps = [
-        ":sub_haskell_pb_lens",
-        #        hackage("data-default"),
+        ":sub_haskell_pb",
+        # TODO
     ],
 )
 
 # Test that we can handle the camel-casing behavior of proto-lens-protoc.
-# In practice, google3 filenames will not be camel-cased, but path components might.
+# In practice, our filenames will not be camel-cased, but path components might.
 # And in particular we should handle filenames with consecutive upper-case letters.
 proto_library(
     name = "camel_case_proto",
@@ -91,8 +104,12 @@ proto_library(
 
 haskell_proto_library(
     name = "camel_case_haskell_pb",
-    api = "lens",
     deps = [":camel_case_proto"],
+)
+
+build_test(
+    name = "camel_case_test",
+    targets = [":camel_case_haskell_pb"],
 )
 
 # A proto library containing both a dash and an underscore.
@@ -103,7 +120,6 @@ proto_library(
 
 haskell_proto_library(
     name = "dashed-file_path_haskell_pb",
-    api = "lens",
     deps = [":dashed-file_path_proto"],
 )
 
@@ -112,6 +128,6 @@ haskell_test(
     srcs = ["DashedFilePathTest.hs"],
     deps = [
         ":dashed-file_path_haskell_pb",
-        #        hackage("data-default"),
+        # TODO
     ],
 )

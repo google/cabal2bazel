@@ -1,9 +1,17 @@
 syntax = "proto2";
 
-import "tools/build_defs/haskell/tests/proto/foo.proto";
-
 package bar;
+
+import "tools/build_defs/haskell/tests/proto/foo.proto";
 
 message Bar {
   optional foo.Foo foo = 1;
+
+  optional Recurse recurse = 2;
+}
+
+// Test that recursive protos can be rendered,
+// since we've explicitly patched hprotoc for that case.
+message Recurse {
+  optional Bar bar = 1;
 }

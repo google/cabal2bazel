@@ -2,10 +2,6 @@
 
 load("//bzl:def.bzl", "haskell_library", "haskell_test")
 
-package(
-    features = ["haskell_strict_deps"],
-)
-
 haskell_library(
     name = "Recursive",
     srcs = [

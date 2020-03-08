@@ -1,11 +1,8 @@
 # Test that TemplateHaskell works and can link against multiple layers of
 # dependencies.
+# (It's still broken for code that depends on FFI; see b/19372897.)
 
 load("//bzl:def.bzl", "haskell_library", "haskell_test")
-
-package(
-    features = ["haskell_strict_deps"],
-)
 
 # A library that depends on another one.
 haskell_library(
@@ -24,6 +21,7 @@ haskell_library(
 haskell_library(
     name = "TestDependencyLib",
     srcs = ["TestDependencyLib.hs"],
+    executes_deps_in_compile = True,
     deps = [":Dependency"],
 )
 
@@ -38,5 +36,22 @@ haskell_test(
 haskell_test(
     name = "TestDependency",
     srcs = ["TestDependency.hs"],
+    executes_deps_in_compile = True,
     deps = [":Dependency"],
+)
+
+# A test that puts all of the files in a single rule.
+haskell_test(
+    name = "TestJoined",
+    srcs = [
+        "Dependency.hs",
+        "TestDependency.hs",
+    ],
+    executes_deps_in_compile = True,
+    deps = [":TransitiveDependency"],
+)
+
+haskell_test(
+    name = "ANNTest",
+    srcs = ["ANNTest.hs"],
 )
