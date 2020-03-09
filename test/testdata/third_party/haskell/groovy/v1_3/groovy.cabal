@@ -3,8 +3,8 @@ Version:             1.2
 Synopsis:            An awesome library.
 Description:         Fake description.
                      Another description line.
-         .
-         New paragraph.
+                     .
+                     New paragraph.
 Homepage:            http://example.com/awesome
 License:             BSD3
 License-file:        LICENSE
@@ -23,8 +23,8 @@ Source-repository head
 
 Flag flag1
   Description: Enable some flag
-  Default: False
-  Manual:  True
+  Default: True
+  Manual:  False
 
 Flag flag2
   Description: Enable another flag
@@ -32,14 +32,10 @@ Flag flag2
   Manual:  False
 
 Library
-  Build-depends:     array >= 1.3 && < 1.4,
-                     containers >= 1.3 && < 1.4,
-                     lens >= 1.3 && < 1.4
-
   if flag(flag1)
-    Build-depends:   package1 >= 1.3 && < 1.4
+    Build-depends:   cool >= 1.8 && < 2.0
 
   if flag(flag2)
-    Build-depends:   package2 >= 1.3 && < 1.4
+    Build-depends:   sweet >= 1.4 && < 1.8
 
   Default-language:  Haskell2010

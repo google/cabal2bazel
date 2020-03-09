@@ -1,26 +1,13 @@
-# Copyright 2018 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#    https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 """Package description auto-generated from awesome.cabal by cabal2build.
 
 Configured with Cabal flags:
-  flag2: True
   flag1: False
+  flag2: True
 """
 description = struct(
+    specVersionRaw = ">=1.10",
     package = struct(pkgName = "awesome", pkgVersion = "1.2"),
-    license = "BSD3",
+    licenseRaw = "BSD3",
     licenseFiles = ["LICENSE"],
     copyright = "",
     maintainer = "user@example.org",
@@ -31,7 +18,7 @@ description = struct(
     ],
     homepage = "http://example.com/awesome",
     pkgUrl = "",
-    bugReports = "http://bugs/",
+    bugReports = "http://b/",
     sourceRepos = [
         struct(
             repoKind = "RepoHead",
@@ -47,34 +34,36 @@ description = struct(
     description = "Fake description.\nAnother description line.\n\nNew paragraph.",
     category = "General",
     customFieldsPD = [],
-    buildDepends = [
-        struct(name = "array", version = ">=1.3 && <1.4"),
-        struct(name = "containers", version = ">=1.3 && <1.4"),
-        struct(name = "lens", version = ">=1.3 && <1.4"),
-        struct(name = "package2", version = ">=1.3 && <1.4")
-    ],
-    specVersionRaw = None,
-    buildType = "Simple",
+    buildTypeRaw = "Simple",
     setupBuildInfo = None,
     library = struct(
+        libName = None,
         exposedModules = [],
         reexportedModules = [],
-        requiredSignatures = [],
-        exposedSignatures = [],
+        signatures = [],
         libExposed = True,
         libBuildInfo = struct(
             buildable = True,
             buildTools = [],
+            buildToolDepends = [],
             cppOptions = [],
+            asmOptions = [],
+            cmmOptions = [],
             ccOptions = [],
+            cxxOptions = [],
             ldOptions = [],
             pkgconfigDepends = [],
             frameworks = [],
             extraFrameworkDirs = [],
+            asmSources = [],
+            cmmSources = [],
             cSources = [],
+            cxxSources = [],
             jsSources = [],
             hsSourceDirs = ["."],
             otherModules = [],
+            virtualModules = [],
+            autogenModules = [],
             defaultLanguage = "Haskell2010",
             otherLanguages = [],
             defaultExtensions = [],
@@ -82,6 +71,8 @@ description = struct(
             oldExtensions = [],
             extraLibs = [],
             extraGHCiLibs = [],
+            extraBundledLibs = [],
+            extraLibFlavours = [],
             extraLibDirs = [],
             includeDirs = [],
             includes = [],
@@ -89,6 +80,7 @@ description = struct(
             options = [],
             profOptions = [],
             sharedOptions = [],
+            staticOptions = [],
             customFieldsBI = [],
             targetBuildDepends = [
                 struct(name = "array", version = ">=1.3 && <1.4"),
@@ -96,10 +88,12 @@ description = struct(
                 struct(name = "lens", version = ">=1.3 && <1.4"),
                 struct(name = "package2", version = ">=1.3 && <1.4")
             ],
-            targetBuildRenaming = []
+            mixins = []
         )
     ),
+    subLibraries = [],
     executables = [],
+    foreignLibs = [],
     testSuites = [],
     benchmarks = [],
     dataFiles = [],

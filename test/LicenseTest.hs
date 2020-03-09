@@ -1,10 +1,10 @@
--- Copyright 2018 Google LLC
+-- Copyright 2020 Google LLC
 --
 -- Licensed under the Apache License, Version 2.0 (the "License");
 -- you may not use this file except in compliance with the License.
 -- You may obtain a copy of the License at
 --
---    https://www.apache.org/licenses/LICENSE-2.0
+--      http://www.apache.org/licenses/LICENSE-2.0
 --
 -- Unless required by applicable law or agreed to in writing, software
 -- distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,23 +14,24 @@
 
 module Main where
 
-import Distribution.Version (Version(..))
 import qualified Distribution.License as Cabal
+import Distribution.Version (mkVersion)
 import Test.Framework (defaultMain)
 import Test.Framework.Providers.HUnit (testCase)
 import Test.HUnit (assertEqual)
 
 import Google.Google3.Tools.Cabal2Build.License
 
-main = defaultMain [ testCase "testLicenseText" testLicenseText ]
+main = do
+    defaultMain [ testCase "getDependencies" testLicenseText ]
 
 caseApache = Cabal.Apache Nothing
 caseGPL = Cabal.GPL Nothing
-caseLGPL_1_0 = Cabal.LGPL (Just (Version [1,0] []))
-caseLGPL_2_1 = Cabal.LGPL (Just (Version [2,1] []))
-caseLGPL_3 = Cabal.LGPL (Just (Version [3] []))
+caseLGPL_1_0 = Cabal.LGPL (Just (mkVersion [1,0]))
+caseLGPL_2_1 = Cabal.LGPL (Just (mkVersion [2,1]))
+caseLGPL_3 = Cabal.LGPL (Just (mkVersion [3]))
 caseLGPL = Cabal.LGPL Nothing
-caseMPL_2_0 = Cabal.MPL (Version [2] [])
+caseMPL_2_0 = Cabal.MPL (mkVersion [2])
 caseUnknownFoo = Cabal.UnknownLicense "Foo"
 
 testLicenseText = do

@@ -1,10 +1,10 @@
--- Copyright 2018 Google LLC
+-- Copyright 2020 Google LLC
 --
 -- Licensed under the Apache License, Version 2.0 (the "License");
 -- you may not use this file except in compliance with the License.
 -- You may obtain a copy of the License at
 --
---    https://www.apache.org/licenses/LICENSE-2.0
+--      http://www.apache.org/licenses/LICENSE-2.0
 --
 -- Unless required by applicable law or agreed to in writing, software
 -- distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,54 +12,42 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{-# LANGUAGE OverloadedStrings, LambdaCase, NoMonomorphismRestriction #-}
+{-# LANGUAGE OverloadedStrings, NoMonomorphismRestriction #-}
 
 -- | Tool to help with fetching Cabal packages from Hackage and installing
---   them as packages under //third_party/haskell.
---
---   See 'usage' for a more detailed explanation.
+--   them as Google3 packages under //third_party/haskell.
 --
 --   This module is largely about interacting with the Real World, including
 --   the user.
 
-module Main where
+module Main (main) where
 
-import Data.Monoid ((<>))
 import Control.Monad (void)
-import Options.Applicative hiding (Success)
-import Data.Text (unpack)
-import Google.Google3 (parsePackageName)
+import Options.Applicative (progDesc, execParser, info)
 
-import Google.Google3.Tools.Cabal2Build
+import Google.Google3.Name (parsePackageName)
+import Google.Google3.Tools.Cabal2Build.Actions
+import Google.Google3.Tools.Cabal2Build.Options
+import Google.Google3.Tools.Cabal2Build.Stackage
 
-usage = unlines [
-    "A tool to help with fetching Cabal packages from Hackage and installing",
-    "them as packages under //third_party/haskell."
-  ]
+import Google.Google3.VCSClient (g3Dir, vcsForGivenDirectory)
 
 main = do
-  let parseInfo = info (options <**> helper)
-        ( fullDesc
-          <> progDesc usage
-          <> header "cabal2bazel" )
-  opts <- execParser parseInfo
-  defaultPackages <- loadDefaultPackages
-
+  let infoMod = progDesc "cabal2bazel"
+  opts <- execParser $ info options infoMod
+  -- TODO(judahjacobson): Locate the top-level directory.
+  vcs <- vcsForGivenDirectory "."
+  putStrLn ("Using google3 directory: " <> g3Dir vcs)
   case operation opts of
-    Install cabalPackageName ->
-      fetchAndInstall opts defaultPackages cabalPackageName >>= \ case
-          (Success _)      -> return ()
-          AlreadyInstalled -> fail $ "Package '" ++
-                                     unpack cabalPackageName ++
-                                     "' already installed."
-          InvalidCabalName -> fail $ "Unintelligible Cabal package name '"
-                                     ++ unpack cabalPackageName ++ "'."
-          UnpackFailed     -> fail $ "Couldn't unpack package '" ++
-                                     unpack cabalPackageName ++ "'."
-    WireUp google3packageName ->
-      void $ wireUpPackage opts defaultPackages $
-        parsePackageName google3packageName
+    Install cabalPackageName -> do
+      name <- parseNameOrId cabalPackageName
+      snapshot <- getSnapshot (resolverOpt opts)
+      fetchAndInstall opts snapshot vcs name
+
+    WireUp path -> do
+      snapshot <- getSnapshot (resolverOpt opts)
+      wireUpInstalledPackage opts snapshot vcs path
 
     ReplaceOwner google3packageName ->
-       void $ replaceOwner opts $
+       void $ replaceOwner opts vcs $
         parsePackageName google3packageName

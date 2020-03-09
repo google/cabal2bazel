@@ -30,10 +30,13 @@ library
   hs-source-dirs:
       src
   build-depends:
-      base >=4.7 && <5,
+      aeson,
+      base >=4.12 && <5,
       Cabal,
       FindBin,
+      bytestring,
       containers,
+      cryptonite,
       directory,
       extra,
       filepath,
@@ -42,32 +45,38 @@ library
       pretty,
       process,
       random,
+      safe,
       temporary,
       text,
       time,
       transformers,
       unix,
-      unordered-containers
+      unordered-containers,
+      yaml
 
   exposed-modules:
       Google.Google3
     , Google.Google3.Buildifier
     , Google.Google3.Name
     , Google.Google3.Package
-    , Google.Google3.Tools.Cabal2Build
     , Google.Google3.Tools.Cabal2Build.Actions
     , Google.Google3.Tools.Cabal2Build.Build
     , Google.Google3.Tools.Cabal2Build.Configuration
     , Google.Google3.Tools.Cabal2Build.Description
+    , Google.Google3.Tools.Cabal2Build.Download
     , Google.Google3.Tools.Cabal2Build.License
     , Google.Google3.Tools.Cabal2Build.Options
     , Google.Google3.Tools.Cabal2Build.PackageName
-    , Google.Google3.Tools.VersionAgnosticThirdParty
+    , Google.Google3.Tools.Cabal2Build.Plan
+    , Google.Google3.Tools.Cabal2Build.Stackage
+    , Google.Google3.Tools.Cabal2Build.VersionAgnosticThirdParty
+    , Google.Google3.VCSClient
     , Google.Runtime.BuildHelper
     , Google.Runtime.FindFiles
     , Google.Utils.DirectoryUtils
     , Google.Utils.Env
     , Google.Utils.Expn
+    , Google.Utils.List
     , Google.Utils.Monad
     , Google.Utils.Pick
     , Google.Utils.ReadPUtils
@@ -98,13 +107,15 @@ test-suite build-test
   ghc-options: -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       base >=4.7 && <5
-              , cabal2bazel
-              , text
-              , random
-              , HUnit
-              , test-framework-hunit
-              , test-framework
-              , filepath
+    , Cabal
+    , cabal2bazel
+    , containers
+    , text
+    , random
+    , HUnit
+    , test-framework-hunit
+    , test-framework
+    , filepath
   other-modules:
       Paths_cabal2bazel
   default-language: Haskell2010
@@ -138,11 +149,28 @@ test-suite license-test
   ghc-options: -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       base >=4.7 && <5
-              , cabal2bazel
-              , Cabal
-              , HUnit
-              , test-framework-hunit
-              , test-framework
+    , cabal2bazel
+    , Cabal
+    , HUnit
+    , test-framework-hunit
+    , test-framework
+  other-modules:
+      Paths_cabal2bazel
+  default-language: Haskell2010
+
+test-suite download-test
+  type: exitcode-stdio-1.0
+  main-is: DownloadTest.hs
+  hs-source-dirs:
+      test
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      base >=4.7 && <5
+    , cabal2bazel
+    , containers
+    , HUnit
+    , test-framework-hunit
+    , test-framework
   other-modules:
       Paths_cabal2bazel
   default-language: Haskell2010

@@ -1,10 +1,10 @@
--- Copyright 2018 Google LLC
+-- Copyright 2020 Google LLC
 --
 -- Licensed under the Apache License, Version 2.0 (the "License");
 -- you may not use this file except in compliance with the License.
 -- You may obtain a copy of the License at
 --
---    https://www.apache.org/licenses/LICENSE-2.0
+--      http://www.apache.org/licenses/LICENSE-2.0
 --
 -- Unless required by applicable law or agreed to in writing, software
 -- distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,82 +14,112 @@
 
 module Google.Google3.Tools.Cabal2Build.Options where
 
-import Control.Applicative ((<|>))
+import Control.Applicative ((<|>), many)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Monoid ((<>))
-import Options.Applicative.Builder
-import Options.Applicative.Help.Chunk (Chunk(..))
-import qualified Options.Applicative.Help.Core as HelpCore
-import Options.Applicative.Internal (ParseError(ShowHelpText))
-import Options.Applicative.Types
-    ( OptName(..)
-    , OptProperties
-    , ParseError(..)
-    , Parser
-    , ParserInfo
-    )
-import qualified Distribution.Text as Cabal
-import qualified Distribution.Version as Cabal
-
-defaultVersion :: Cabal.Version
-defaultVersion = Cabal.Version [8, 0, 2] []
+import Distribution.PackageDescription (FlagName)
+import Options.Applicative (Parser, flag, help, metavar, long, showDefault,
+                            strOption, value)
+import Google.Google3.Tools.Cabal2Build.Configuration (makeFlagName)
 
 -- | Operation to perform.
-data Operation = Install Text  -- ^ Install Cabal package.
-               | WireUp Text   -- ^ Add Google files to existing directory with
-                               --   unpacked Cabal package.
+data Operation = Install Text      -- ^ Install Cabal package.
+               | WireUp FilePath   -- ^ Add Google files to existing
+                                   -- directory with unpacked Cabal
+                                   -- package.
                | ReplaceOwner Text -- ^ Replace an owner in a package.
 
--- | Whether to prompt the user or use defaults.
-data PromptOption = Prompt | UseDefaults
+-- | Whether to keep old versions of packages.
+data KeepOption = Keep | Cleanup
+    deriving Eq
 
--- | Whether to generate files for go/cabal2buildv2.
--- TODO(judahjacobson): Remove the non-bzl way after everything's switched
--- over.
-data BzlOption = UseBzl | NoUseBzl
+-- | Whether to enable the package and generate a version-agnostic BUILD file.
+data EnabledOption = Disabled | Enabled
+    deriving (Eq, Show)
+
+-- | How far down the package dependency graph to go.
+data DepthOption
+    = Recursive  -- ^ Fetch every transitive depenency
+    | Immediate  -- ^ Only this target
     deriving Eq
 
 -- | Command line options.
 data Options = Options
     { operation     :: Operation
-    , recursiveOpt  :: Bool
-    , promptOpt     :: PromptOption
+    , recursiveOpt  :: DepthOption
     , ownerOpt      :: Text
-    , bzlOpt        :: BzlOption
-    , ghcVersionOpt :: Cabal.Version
+    , resolverOpt   :: Resolver
+    , keepOpt       :: KeepOption
+    , cabalFlags    :: [(FlagName, Bool)]
+    , enabledOpt    :: EnabledOption
+    , dryRunOpt     :: DryRunOption
     }
 
+data DryRunOption
+    = DryRun
+    | ReallyRun
+    deriving Eq
+
+-- | An identifier for a version of the Stackage build plan.
+-- The string is either of the form "lts-*" or "nightly-*".
+newtype Resolver = Resolver { unResolver :: String }
+
+defaultResolver :: String
+defaultResolver = "lts-13.3"
+
+defaultPrimaryOwner :: String
+defaultPrimaryOwner = "default-owner"
+
 options :: Parser Options
-options = Options <$> (install <|> wireUp <|> replaceOwner) <*> recursive <*> prompt <*> owner
-                  <*> bzl <*> ghcVersion
+options = Options <$> (install <|> wireUp <|> replaceOwner)
+                  <*> recursive <*> owner
+                  <*> resolver <*> keep <*> many cabalFlag <*> enabled
+                  <*> dryRun
     where install = Install . Text.pack
               <$> strOption (
                   long "fetch" <>
+                  metavar "HACKAGE_PACKAGE" <>
                   help "Haskell package to fetch and install")
-          wireUp = WireUp . Text.pack
+          wireUp = WireUp
               <$> strOption (
                   long "wire-up" <>
+                  metavar "VERSIONED_DIR" <>
                   help  "Google3 package to wire up")
           replaceOwner = ReplaceOwner . Text.pack
               <$> strOption (
                   long "replace-owner" <>
                   help  "Google3 package to replace an owner in")
-          recursive = flag False True
+          recursive = flag Immediate Recursive
               (long "recursive" <> help "Recursively install dependencies")
-          prompt = flag Prompt UseDefaults
-              (long "use-defaults" <>
-              help "Whether to use defaults instead of prompting the user")
+          dryRun = flag ReallyRun DryRun
+              (long "dry-run" <>
+               help "Stop before actually installing packages")
           owner = Text.pack
               <$> strOption (
                   long "owner" <>
-                  help "Other owner of packages, asks interactively or chooses \
-                       \randomly if empty" <> value "" <> showDefault)
-          bzl = flag UseBzl NoUseBzl
-              (long "no-bzl" <>
-               help "Whether to not generate files for go/cabal2buildv2")
-          ghcVersion :: Parser Cabal.Version
-          ghcVersion = option (maybeReader Cabal.simpleParse)
-              (long "ghc-version" <>
-               help "Which version of to evaluate the cabal file for" <>
-               value defaultVersion <> showDefault)
+                  help ("Primary owner of packages. " ++
+                        "Current user will be added as the secondary owner.") <>
+                  value defaultPrimaryOwner <>
+                  showDefault)
+          resolver :: Parser Resolver
+          resolver = Resolver
+              <$> strOption
+              (long "resolver" <>
+               help "Which version of Stackage to use for this package" <>
+               value defaultResolver <> showDefault)
+          keep = flag Cleanup Keep
+                    (long "keep" <> help "Don't delete old versions")
+          cabalFlag :: Parser (FlagName, Bool)
+          cabalFlag = makeCabalFlag
+              <$> strOption (
+                  long "flag" <>
+                  help "Cabal flag to override the Stackage default")
+          makeCabalFlag :: String -> (FlagName,Bool)
+          makeCabalFlag ('-':s) = (makeFlagName s, False)
+          makeCabalFlag ('+':s) = (makeFlagName s, True)
+          makeCabalFlag s = (makeFlagName s, True)
+          enabled = flag Enabled Disabled
+                    (long "disabled" <>
+                     help ("Disable and don't generate a version-agnostic "
+                           ++ "BUILD file."))

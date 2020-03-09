@@ -1,10 +1,10 @@
--- Copyright 2018 Google LLC
+-- Copyright 2020 Google LLC
 --
 -- Licensed under the Apache License, Version 2.0 (the "License");
 -- you may not use this file except in compliance with the License.
 -- You may obtain a copy of the License at
 --
---    https://www.apache.org/licenses/LICENSE-2.0
+--      http://www.apache.org/licenses/LICENSE-2.0
 --
 -- Unless required by applicable law or agreed to in writing, software
 -- distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,12 +12,10 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{-# LANGUAGE CPP #-}
 module Main where
 
+import Data.List (sortOn)
 import qualified Data.Map as Map
-import qualified Data.Text as Text
-import Data.Version (makeVersion)
 import Distribution.Compiler
 import Distribution.License
 import Distribution.Package
@@ -27,55 +25,57 @@ import Language.Haskell.Extension
 import System.FilePath
 import Test.Framework (defaultMain)
 import Test.Framework.Providers.HUnit (testCase)
-import Test.HUnit (assertBool, assertEqual)
+import Test.HUnit (assertEqual)
 
-import Google.Google3.Tools.Cabal2Build
+import Google.Google3.Tools.Cabal2Build.Actions
+    ( loadCabalFile
+    , generateOwnersFileContent
+    )
+import Google.Google3.Tools.Cabal2Build.Configuration (makeFlagName)
 import Google.Google3.Tools.Cabal2Build.Description (descriptionFileContents)
+import Google.Google3.Tools.Cabal2Build.Stackage (Snapshot(..))
 
 main = do
     defaultMain
-        [ testCase "defaultPackages" testDefaultPackages
-        , testCase "loadCabalFile" testLoadCabalFile
+        [ testCase "loadCabalFile" testLoadCabalFile
         , testCase "generatePackageDescriptionFile"
               testGeneratePackageDescriptionFile
         ]
-
-testDefaultPackages = do
-    defaults <- loadDefaultPackages
-    assertBool "Default packages must contain 'base'" $
-        Text.pack "base" `elem` defaults
 
 testDataDir = "test/testdata"
 baseDir = testDataDir </> "awesome-1.2"
 
 testLoadCabalFile = do
+    let plan = Snapshot
+                { corePackageVersions = Map.empty
+                , ghcVersion = defaultGhcVersion
+                , snapshotPackages = Map.empty
+                }
     (packageDesc, flags) <-
-        loadCabalFile UseDefaults defaultVersion (baseDir </> "awesome.cabal")
+        loadCabalFile [] plan (baseDir </> "awesome.cabal")
     let depVersionRange =
             intersectVersionRanges
-                (unionVersionRanges
-                    (thisVersion (makeVersion [1,3]))
-                    (laterVersion (makeVersion [1,3])))
-                (earlierVersion (makeVersion [1,4]))
+                (orLaterVersion (mkVersion [1,3]))
+                (earlierVersion (mkVersion [1,4]))
     let expectedDesc = PackageDescription
             { package = PackageIdentifier
-                { pkgName = PackageName "awesome"
-                , pkgVersion = makeVersion [1,2]
+                { pkgName = mkPackageName "awesome"
+                , pkgVersion = mkVersion [1,2]
                 }
-            , license = BSD3
+            , licenseRaw = Right BSD3
             , licenseFiles = ["LICENSE"]
             , copyright = ""
             , maintainer = "user@example.org"
             , author = "John Doe"
             , stability = ""
             , testedWith =
-                [ (GHC, thisVersion (makeVersion [7,6,3]))
-                , (GHC, thisVersion (makeVersion [7,8,4]))
-                , (GHC, thisVersion (makeVersion [7,10,1]))
+                [ (GHC, thisVersion (mkVersion [7,6,3]))
+                , (GHC, thisVersion (mkVersion [7,8,4]))
+                , (GHC, thisVersion (mkVersion [7,10,1]))
                 ]
             , homepage = "http://example.com/awesome"
             , pkgUrl = ""
-            , bugReports = "http://bugs/"
+            , bugReports = "http://b/"
             , sourceRepos = [ SourceRepo
                 { repoKind = RepoHead
                 , repoType = Just Git
@@ -90,59 +90,23 @@ testLoadCabalFile = do
                 "Another description line.\n\nNew paragraph."
             , category = "General"
             , customFieldsPD = []
-            , buildDepends =
-                [ Dependency (PackageName "array") depVersionRange
-                , Dependency (PackageName "containers") depVersionRange
-                , Dependency (PackageName "lens") depVersionRange
-                , Dependency (PackageName "package2") depVersionRange
-                ]
-            , specVersionRaw = Right $
-                unionVersionRanges
-                    (thisVersion (makeVersion [1,10]))
-                    (laterVersion (makeVersion [1,10]))
-            , buildType = Just Simple
+            , specVersionRaw = Right $ orLaterVersion (mkVersion [1,10])
+            , buildTypeRaw = Just Simple
+            , subLibraries = []
+            , foreignLibs = []
             , setupBuildInfo = Nothing
-            , library = Just Library
-                { exposedModules = []
-                , reexportedModules = []
-                , requiredSignatures = []
-                , exposedSignatures = []
-                , libExposed = True
-                , libBuildInfo = BuildInfo
+            , library = Just mempty
+                { libExposed = True
+                , libBuildInfo = mempty
                     { buildable = True
-                    , buildTools = []
-                    , cppOptions = []
-                    , ccOptions = []
-                    , ldOptions = []
-                    , pkgconfigDepends = []
-                    , frameworks = []
-                    , extraFrameworkDirs = []
-                    , cSources = []
                     , hsSourceDirs = ["."]
-                    , otherModules = []
                     , defaultLanguage = Just Haskell2010
-                    , otherLanguages = []
-                    , defaultExtensions = []
-                    , otherExtensions = []
-                    , oldExtensions = []
-                    , extraLibs = []
-                    , extraLibDirs = []
-                    , includeDirs = []
-                    , includes = []
-                    , installIncludes = []
-                    , Distribution.PackageDescription.options = []
-                    , customFieldsBI = []
                     , targetBuildDepends =
-                        [ Dependency (PackageName "array") depVersionRange
-                        , Dependency (PackageName "containers") depVersionRange
-                        , Dependency (PackageName "lens") depVersionRange
-                        , Dependency (PackageName "package2") depVersionRange
+                        [ Dependency (mkPackageName "array") depVersionRange
+                        , Dependency (mkPackageName "containers") depVersionRange
+                        , Dependency (mkPackageName "lens") depVersionRange
+                        , Dependency (mkPackageName "package2") depVersionRange
                         ]
-                    , jsSources = []
-                    , extraGHCiLibs = []
-                    , profOptions = []
-                    , sharedOptions = []
-                    , targetBuildRenaming = Map.empty
                     }
                 }
             , executables = []
@@ -154,14 +118,30 @@ testLoadCabalFile = do
             , extraTmpFiles = []
             , extraDocFiles = []
             }
-    assertEqual "pacakge description" expectedDesc packageDesc
+    assertEqual "package description" expectedDesc packageDesc
 
-    let expectedFlags = [(FlagName "flag2", True), (FlagName "flag1", False)]
-    assertEqual "flags" expectedFlags flags
+    let expectedFlags = [(makeFlagName "flag1", False), (makeFlagName "flag2", True)]
+    assertEqual "flags" expectedFlags (sortOn fst flags)
 
 testGeneratePackageDescriptionFile = do
+    let plan = Snapshot
+                { corePackageVersions = Map.empty
+                , ghcVersion = defaultGhcVersion
+                , snapshotPackages = Map.empty
+                }
     (packageDesc, flags) <-
-        loadCabalFile UseDefaults defaultVersion (baseDir </> "awesome.cabal")
+        loadCabalFile [] plan (baseDir </> "awesome.cabal")
     let actual = descriptionFileContents flags packageDesc
     expected <- readFile (testDataDir </> "expected_package_description.bzl")
     assertEqual "packageDescription" expected actual
+
+testGenerateOwnersFileContent = do
+    let owner = "default-owner"
+    content <- generateOwnersFileContent owner
+    let firstLine = head . lines $ content
+    -- The passed owner must be in the first line.
+    assertEqual "owners" owner firstLine
+
+-- Currently unused:
+defaultGhcVersion :: Version
+defaultGhcVersion = mkVersion [8]
