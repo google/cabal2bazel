@@ -1,10 +1,10 @@
--- Copyright 2018 Google LLC
+-- Copyright 2020 Google LLC
 --
 -- Licensed under the Apache License, Version 2.0 (the "License");
 -- you may not use this file except in compliance with the License.
 -- You may obtain a copy of the License at
 --
---    https://www.apache.org/licenses/LICENSE-2.0
+--      http://www.apache.org/licenses/LICENSE-2.0
 --
 -- Unless required by applicable law or agreed to in writing, software
 -- distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,10 +12,15 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
+-- TODO(judahjacobson): Remove this module after migrating to ghc-8.4
+-- (really, to Cabal>=2.2) which supports SPDX naming.
 module Google.Google3.Tools.Cabal2Build.License (showCabalLicense) where
 
 import Data.List (intercalate)
-import Distribution.Version (Version(..))
+import Distribution.Version (
+    Version,
+    versionNumbers,
+    )
 import qualified Distribution.License as Cabal
 
 -- | Representation of Cabal license specifications in generated Google
@@ -37,6 +42,8 @@ showCabalLicense l = show l
 
 -- | Translate a Distribution.Version to an SPDX compatible string.
 showVersion :: Version -> String
-showVersion (Version [] _) = ""
-showVersion (Version [x] _) = "-" ++ show x ++ ".0"
-showVersion (Version xs _) = "-" ++ intercalate "." (map show xs)
+showVersion v =
+    case versionNumbers v of
+      [] -> ""
+      [x] -> "-" ++ show x ++ ".0"
+      xs -> "-" ++ intercalate "." (map show xs)

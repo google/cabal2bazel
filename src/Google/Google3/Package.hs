@@ -1,10 +1,10 @@
--- Copyright 2018 Google LLC
+-- Copyright 2020 Google LLC
 --
 -- Licensed under the Apache License, Version 2.0 (the "License");
 -- you may not use this file except in compliance with the License.
 -- You may obtain a copy of the License at
 --
---    https://www.apache.org/licenses/LICENSE-2.0
+--      http://www.apache.org/licenses/LICENSE-2.0
 --
 -- Unless required by applicable law or agreed to in writing, software
 -- distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,6 +12,8 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
+-- For the Prelude import on ghc<8.4.1:
+{-# OPTIONS_GHC -Wno-dodgy-imports #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Structure and syntax of Google3 BUILD files.
@@ -26,6 +28,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Google.Google3.Name
 import Text.PrettyPrint.HughesPJ
+import Prelude hiding ((<>))
 
 -- Enough abstract structure of packages to get by.
 
@@ -48,9 +51,8 @@ data Source
   | LabelSource Label    -- ^ Some other label
   | GlobSource Glob      -- ^ A set of files
 
-data Dependency
+newtype Dependency
   = Labelled Label -- ^ Target name fully qualified by Google3 package.
-  | Hackage Text   -- ^ Target is specifically a Hackage package.
 
 -- | A single rule declaration in a BUILD file.
 data Rule = Rule {
@@ -69,14 +71,11 @@ data Package = Package {
   packageName :: PackageName,
   packageComment :: Text,
   packageAttributes :: PackageAttributes,
-  -- | Sorry, this isn't pretty at all. An ideal representation would be able
-  --   to attach comments to arbitrary statements.
-  packageLicenseComment :: Maybe Text,
   packageLicenses :: [License],
   packageLicenseFile :: Text,
   packageRules :: [Rule],
   -- | Additional statements to add.
-  -- TODO(judahjacobson): This is a little hacky due to go/cabal2buildv2
+  -- TODO(judahjacobson): This is a little hacky due to cabal2buildv2
   -- which needs a non-standard "load".  We can try to clean this up
   -- after we remove the old way.
   packageStmts :: [Stmt]
@@ -131,7 +130,6 @@ sourceSyntax srcs = foldr1 (BinOp "+") $
 
 dependencyExpr :: Dependency -> Expr
 dependencyExpr (Labelled l) = LitString (Text.pack $ show l)
-dependencyExpr (Hackage n) = Call "hackage" [LitString n] []
 
 ruleSyntax r = SExpr $ Call (ruleClass r) []
     $ [("name", LitString . unTargetName . ruleName $ r)]
@@ -149,20 +147,19 @@ packageAttributesSyntax a = SExpr $ Call "package" [] [
 commentSyntax s | Text.null s = []
                 | otherwise   = [SComment s]
 
-maybeCommentedSyntax Nothing s = s
-maybeCommentedSyntax (Just c) s = SWithComment s c
-
 packageSyntax :: Package -> BuildFile
 packageSyntax = BuildFile . stmts where
+  -- Make sure to put load() statements at the top.
+  -- Ideally we'd rely on buildifier to do that automatically, but it doesn't
+  -- yet: https://github.com/bazelbuild/buildtools/issues/651
   stmts p = commentSyntax (packageComment p)
-            ++ [packageAttributesSyntax (packageAttributes p)]
-            ++ licenseSyntax (packageLicenses p) (packageLicenseComment p)
-            ++ licenseFileSyntax (packageLicenseFile p)
             ++ loadStmtsForRules (packageRules p)
+            ++ [packageAttributesSyntax (packageAttributes p)]
+            ++ licenseSyntax (packageLicenses p)
+            ++ licenseFileSyntax (packageLicenseFile p)
             ++ map ruleSyntax (packageRules p)
             ++ packageStmts p
-  licenseSyntax [] _ = []
-  licenseSyntax ls c = [maybeCommentedSyntax c (licenseAssignment ls)]
+  licenseSyntax ls = [licenseAssignment ls]
   licenseAssignment ls = SExpr $ Call "licenses" [stringListSyntax ls] []
   licenseFileSyntax "" = []
   licenseFileSyntax lf = [SExpr $ Call "exports_files" [stringListSyntax [lf]] []]
@@ -177,20 +174,14 @@ loadStmtsForRules rules = loadStmts
         , (hasClass "haskell_test", "haskell_test", mainDefFile)
         , (hasClass "cabal_haskell_package", "cabal_haskell_package",
                cabalDefFile)
-        , (hasClass "cabal_haskell_library", "cabal_haskell_library",
-               cabalDefFile)
-        , (any isHackage . ruleDeps, "hackage", hackageDefFile)
         ]
     mainDefFile = "//tools/build_defs/haskell:def.bzl"
-    hackageDefFile = "//haskell/build_defs:build_defs.bzl"
     cabalDefFile = "//tools/build_defs/haskell:cabal_package.bzl"
     requiredDefs = [ (defFile, def)
                    | (p, def, defFile) <- ruleTable, any p rules ]
     groupedByFile = groupSort requiredDefs
     loadStmts = map (uncurry addLoad) groupedByFile
     hasClass cls = (== cls) . ruleClass
-    isHackage (Hackage _) = True
-    isHackage _ = False
 
 addLoad :: Text -> [Text] -> Stmt
 addLoad defFile defs = SExpr $ Call "load" (map LitString (defFile : defs)) []
