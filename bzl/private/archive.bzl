@@ -14,6 +14,7 @@
 
 """Functions for creating static and dynamic shared libraries."""
 
+load("@bazel_skylib//lib:paths.bzl", "paths")
 load("@bazel_skylib//lib:collections.bzl", "collections")
 load("//bzl/private:action.bzl", "multi_action")
 load(
@@ -106,19 +107,21 @@ def _shared_linker_args(output_lib, libs, runtime_libs = []):
         ["-Wl,-rpath," + origin_rpath_prefix + d for d in dynamic_lib_dirs]
     )
 
-def create_shared_haskell_lib(ctx, toolchains, archive_name, lib, collected_deps):
+def create_shared_haskell_lib(ctx, toolchains, archive_name, lib, collected_deps, bundle_cc_deps):
     """Links the Haskell-built *.dyn_o objects together into a shared library.
 
     Args:
       ctx: The current rule context
-      toolchains: A struct as returned by def.bzl:_get_toolchains.
+      toolchains: A struct as returned by def.bzl:get_toolchains.
       archive_name: The name of the output archive, minus the "lib"
         prefix and ".a" suffix.
       lib: The compiled library.
       collected_deps: A struct of dependencies of this target.
 
     Returns:
-      A File for the resulting "*.so" library.
+      A pair of File objects. First one is the resulting "*.so" Haskell library,
+      while the second is a LibraryToLink representing a cc dynamic library that
+      links against all cc dependencies of the Haskell target.
     """
     config = toolchains.haskell
     ld = link_executable_command(
@@ -127,12 +130,44 @@ def create_shared_haskell_lib(ctx, toolchains, archive_name, lib, collected_deps
         is_linking_dynamic_library = True,
     )
 
-    # TODO: do we need to also include the version number when it's nontrivial?
+    # GHC expects the compiler version suffix in the .so file name.
+    # https://downloads.haskell.org/~ghc/latest/docs/html/users_guide/packages.html#building-a-package-from-haskell-source
     shared_lib = ctx.actions.declare_file("{}/lib{}-ghc{}.so".format(
         package.libdir(ctx),
         archive_name,
         config.version,
     ))
+
+    if bundle_cc_deps:
+        # Bundle all CC deps into a self-contained dynamic shared library. It
+        # will remain dynamic even when the library will get linked into a
+        # mostly-statically linked executable, and will then be copied into
+        # the .runfiles directory along with the Haskell shared library.
+        #
+        # Note that this is potentially inefficient when a target uses fully
+        # shared linking and depends on multiple Haskell libraries that
+        # have shared CC dependencies. In that situation each Haskell library
+        # will bundle its own copy of the CC dependency.
+        #
+        # We could achieve the same by doing the parsing of LibraryToLink
+        # dependencies here and trying to link as many of them as static
+        # libs, but this would unnecessarily replicate the CC toolchain logic
+        # that we use here.
+        cc_deps_lib_path = "{}/lib{}-cc-deps.so".format(
+            package.libdir(ctx),
+            archive_name,
+        )
+        cc_deps_lib = dynamic_cc_deps_archive(
+            ctx,
+            toolchains.cc,
+            cc_deps_lib_path,
+            collected_deps.immediate_cc_libs,
+        )
+        libs_to_link = [cc_deps_lib.dynamic_library]
+    else:
+        libs_to_link = collected_deps.immediate_cc_dylibs
+        cc_deps_lib = None
+
     package_link = package.link_options(collected_deps)
     options = (
         ghc_options.library_root(config) +
@@ -142,7 +177,7 @@ def create_shared_haskell_lib(ctx, toolchains, archive_name, lib, collected_deps
         ["-shared", "-dynamic", "-o", shared_lib.path] +
         ["-optl" + a for a in _shared_linker_args(
             shared_lib,
-            collected_deps.immediate_cc_dylibs,
+            libs_to_link,
             get_dynamic_runtime_libs(ctx),
         )]
     )
@@ -154,7 +189,7 @@ def create_shared_haskell_lib(ctx, toolchains, archive_name, lib, collected_deps
         arguments = options,
         inputs = depset(
             config.compiler_bundle + [config.compiler, lib.object] +
-            collected_deps.immediate_cc_dylibs,
+            libs_to_link,
             transitive = [
                 package_link.inputs,
                 collected_deps.transitive.haskell.shared_libs,
@@ -167,7 +202,69 @@ def create_shared_haskell_lib(ctx, toolchains, archive_name, lib, collected_deps
         progress_message = "Linking Haskell shared library for " + str(ctx.label),
     )
 
-    return shared_lib
+    return shared_lib, cc_deps_lib
+
+def dynamic_cc_deps_archive(ctx, cc_toolchain, lib_path, libs):
+    """(Mostly) Statically link the specified cc libraries into a shared library.
+
+    This weird trick hardens the Haskell shared libraries, making it possible to
+    use them in targets that use mostly static linking. Without it, blaze is happy
+    to link the cc dependencies directly into the output and consider them resolved,
+    without realizing that the Haskell .so files will need a shared version of them.
+    This helper bundles all cc libraries in a shared object, and hides the possibility
+    of creating its static version from blaze, guaranteeing that the cc deps are always
+    available to be dynamically loaded.
+
+    Args:
+      ctx: The current rule context.
+      cc_toolchain: A struct as returned by get_configured_cc_toolchain.
+      lib_path: The desired path of the output file.
+      libs: A list of LibraryToLink objects representing the cc dependencies.
+
+    Returns:
+      A LibraryToLink, wrapping a shared library that links against all of the libs.
+    """
+
+    # Point the linker at the directories containing the dependencies.
+    # Also include the runtime libraries, which are implicit dependencies of every cc_library.
+    linking_ctx = cc_common.create_linking_context(
+        libraries_to_link = libs,
+    )
+    lib_name = paths.basename(lib_path)
+
+    # Note that even though the output of .link can be used as a static
+    # library, we consciously fail to report that such a static library
+    # can be treated as an output of this rule, to ensure that this
+    # .so will be added to the runfiles.
+    linking_outputs = cc_common.link(
+        actions = ctx.actions,
+        feature_configuration = cc_toolchain.feature_configuration,
+        cc_toolchain = cc_toolchain.toolchain,
+        output_type = "dynamic_library",
+        link_deps_statically = True,
+        linking_contexts = [linking_ctx],
+        name = lib_name,
+    )
+
+    # We have to copy this out, because cc_common.link returns a file in _solib
+    # which triggers an assertion in create_library_to_link.
+    linked_lib = linking_outputs.library_to_link.dynamic_library
+    output_lib = ctx.actions.declare_file(lib_path)
+    ctx.actions.run_shell(
+        inputs = [linked_lib],
+        outputs = [output_lib],
+        command = "cp -f \"$1\" \"$2\"",
+        arguments = [linked_lib.path, output_lib.path],
+        mnemonic = "HaskellCopyCcDeps",
+        progress_message = "Copying CC dependency bundle for Haskell rule " + str(ctx.label),
+        use_default_shell_env = True,
+    )
+    return cc_common.create_library_to_link(
+        actions = ctx.actions,
+        feature_configuration = cc_toolchain.feature_configuration,
+        cc_toolchain = cc_toolchain.toolchain,
+        dynamic_library = output_lib,
+    )
 
 def create_wrapper_shared_cc_lib(ctx, cc_toolchain, name, libs):
     """Links the given shared libraries into another "wrapper" library.

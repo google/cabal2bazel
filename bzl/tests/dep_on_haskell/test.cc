@@ -8,6 +8,7 @@ int main(int argc, char **argv) {
   hs_init(&argc, &argv);
   std::cout << inc2(1) << "\n";
   std::cout << inc3(1) << "\n";
+  std::cout << mul10(123) << "\n";
   hs_exit();
   return 0;
 }

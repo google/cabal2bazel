@@ -17,8 +17,13 @@
 module Lib where
 
 import Internal.Inc (inc)
+import Data.Text as T
 
 inc2 :: Int -> Int
 inc2 = inc . inc
 
+mul10 :: Int -> Int
+mul10 = read . T.unpack . (`T.snoc` '0') . T.pack . show
+
 foreign export ccall inc2 :: Int -> Int
+foreign export ccall mul10 :: Int -> Int

@@ -1,5 +1,6 @@
 # Internal functions for the Haskell build rules.
 load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
+load("@bazel_skylib//rules:common_settings.bzl", "bool_setting")
 
 package(default_visibility = ["//bzl:__subpackages__"])
 
@@ -23,12 +24,20 @@ bzl_library(
         "providers.bzl",
         "runfiles.bzl",
         "toolchains.bzl",
-        "@bazel_tools//tools/build_defs/cc:action_names.bzl",
-        "@bazel_tools//tools/cpp:toolchain_utils.bzl",
     ],
     deps = [
         "@bazel_skylib//lib:paths",
+        "@bazel_tools//tools/build_defs/cc:action_names",
+        "@bazel_tools//tools/build_defs/cc/contrib:cc_lto_backend",
         "//bzl:paths",
         "//bzl:settings",
+        "//bzl/private/builddata:builddata.bzl",
+        "@bazel_tools//tools/cpp:toolchain_utils",
     ],
+)
+
+bool_setting(
+    name = "bundle_cc_deps",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
 )

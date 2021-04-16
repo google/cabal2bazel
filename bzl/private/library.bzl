@@ -32,6 +32,7 @@ To enable profiling for a build, set the "prof" define variable to true, e.g.
 # https://downloads.haskell.org/~ghc/latest/docs/html/users_guide/packages.html#installed-pkg-info
 
 load("@bazel_skylib//lib:dicts.bzl", "dicts")
+load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load(
     "//bzl/private:archive.bzl",
     "create_shared_haskell_lib",
@@ -162,6 +163,7 @@ def _create_ccinfo(
         ctx,
         toolchains,
         collected_deps,
+        cc_deps_lib,
         shared_lib_archives,
         foreign_exports,
         stub_headers):
@@ -170,6 +172,7 @@ def _create_ccinfo(
     Args:
       ctx: The current rule context.
       toolchains: A struct as returned by get_toolchains().
+      cc_deps_lib: A LibraryToLink returned by create_shared_haskell_lib().
       collected_deps: A struct of dependencies of this rule.
       shared_lib_archives: A list of Files (.so)
       foreign_exports: A list of strings; module names with a "foreign export"
@@ -187,18 +190,25 @@ def _create_ccinfo(
         ],
     )
     libs_to_link = all_shared_libs.to_list() + toolchains.haskell.shared_libraries
+
+    # TODO(b/144594540):  This is inefficient if multiple libraries depend on
+    # each other and all have foreign_exports.
+    libraries_to_link = [
+        cc_common.create_library_to_link(
+            actions = ctx.actions,
+            feature_configuration = toolchains.cc.feature_configuration,
+            cc_toolchain = toolchains.cc.toolchain,
+            dynamic_library = slib,
+        )
+        for slib in libs_to_link
+    ]
+    if cc_deps_lib != None:
+        libraries_to_link.append(cc_deps_lib)
+        libraries_to_link += collected_deps.only_transitive_cc_libs.to_list()
+    else:
+        libraries_to_link += collected_deps.transitive.cc.libs.to_list()
     linking_context = cc_common.create_linking_context(
-        # TODO(b/144594540):  This is inefficient if multiple libraries depend on
-        # each other and all have foreign_exports.
-        libraries_to_link = [
-            cc_common.create_library_to_link(
-                actions = ctx.actions,
-                feature_configuration = toolchains.cc.feature_configuration,
-                cc_toolchain = toolchains.cc.toolchain,
-                dynamic_library = slib,
-            )
-            for slib in libs_to_link
-        ] + collected_deps.transitive.cc.libs.to_list(),
+        libraries_to_link = libraries_to_link,
     )
 
     (compilation_context, compilation_outputs) = cc_common.compile(
@@ -207,6 +217,7 @@ def _create_ccinfo(
         feature_configuration = toolchains.cc.feature_configuration,
         cc_toolchain = toolchains.cc.toolchain,
         public_hdrs = stub_headers,
+        grep_includes = ctx.file._grep_includes,
     )
 
     return CcInfo(
@@ -219,7 +230,8 @@ def _haskell_library_impl(
         dependencies = struct(),
         hidden_modules = [],
         reexported_modules = [],
-        srcs_options = struct()):
+        srcs_options = struct(),
+        bundle_cc_deps = False):
     """Common code for building a Haskell library.
 
     Args:
@@ -325,9 +337,15 @@ def _haskell_library_impl(
         static_lib_archives += [
             create_static_lib_archive(ctx, toolchains.cc, archive_name, lib.object, "o"),
         ]
-        shared_lib_archives += [
-            create_shared_haskell_lib(ctx, toolchains, archive_name, lib, collected_deps),
-        ]
+        shared_lib, cc_deps_lib = create_shared_haskell_lib(
+            ctx,
+            toolchains,
+            archive_name,
+            lib,
+            collected_deps,
+            bundle_cc_deps = bundle_cc_deps,
+        )
+        shared_lib_archives += [shared_lib]
         if lib.prof:
             hi_dirs += [lib.prof.hi]
             static_lib_archives += [create_static_lib_archive(ctx, toolchains.cc, archive_name + "_p", lib.prof.object, "p_o")]
@@ -348,12 +366,26 @@ def _haskell_library_impl(
     if hasattr(ctx.files, "data"):
         runfiles = collect_runfiles(
             ctx = ctx,
+            files = [lib.mix] if lib and lib.mix else [],
             data = ctx.attr.data,
             deps = dependencies.deps,
         )
     else:
         # haskell_proto_{library/attribute}
         runfiles = ctx.runfiles()
+
+    if lib and bundle_cc_deps:
+        # Insert the cc_deps_lib into output's cc dependencies
+        cc_output = struct(
+            libs = depset(
+                direct = [cc_deps_lib],
+                transitive = [collected_deps.only_transitive_cc_libs],
+            ),
+            link_flags = collected_deps.transitive.cc.link_flags,
+            additional_link_inputs = collected_deps.transitive.cc.additional_link_inputs,
+        )
+    else:
+        cc_output = collected_deps.transitive.cc
 
     transitive_output = struct(
         haskell = new_haskell_transitive(
@@ -370,56 +402,74 @@ def _haskell_library_impl(
             cache = checked_package_cache,
             hi_dirs = [lib.checked_hi] if lib else [],
         ),
-        cc = collected_deps.transitive.cc,
+        cc = cc_output,
     )
 
-    return [
-        DefaultInfo(
-            # If the library has no srcs, put the exposed_modules_list in its output group
-            # so that its dependencies still get built.
-            files = depset(([lib.hi, lib.object] if lib else [exposed_modules_list]) +
-                           ([module_names_ok] if module_names_ok else [])),
-            runfiles = runfiles,
-        ),
-        OutputGroupInfo(
-            **dicts.add(
-                {
-                    "haskell_check": depset([lib.checked_hi if lib else exposed_modules_list]),
-                    "haskell_exposed_modules": depset([exposed_modules_list]),
-                    # Forward the immediate (non-transitive) to make the UX nicer for
-                    # building haskell_proto_library via the --aspects flag.  (It's a
-                    # subset of haskell_transitive_deps, but the transitive data would
-                    # clutter up the console.)
-                    "haskell_library_files": depset([package_cache] + hi_dirs + shared_lib_archives),
-                },
-                library_info_output_groups(ctx, metadata.key, transitive_output.haskell),
-                compile_info_output_groups(
-                    ctx = ctx,
-                    metadata = metadata,
-                    deps = collected_deps,
-                    srcs_options = srcs_options,
-                    hidden_modules = hidden_modules,
-                    runfiles = runfiles.files,
-                    wrapper_lib = lib.wrapper_lib if lib else None,
-                ),
-            )
-        ),
-        HaskellInfo(
-            metadata = metadata,
-            module_names_ok = module_names_ok,
-            exposed_modules = exposed_modules,
-            transitive = transitive_output,
-        ),
-    ] + ([
+    default_info = DefaultInfo(
+        # If the library has no srcs, put the exposed_modules_list in its output group
+        # so that its dependencies still get built.
+        files = depset(([lib.hi, lib.object, exposed_modules_list] if lib else [exposed_modules_list]) +
+                       ([module_names_ok] if module_names_ok else [])),
+        runfiles = runfiles,
+    )
+    output_group_info = OutputGroupInfo(
+        **dicts.add(
+            {
+                "haskell_check": depset([lib.checked_hi if lib else exposed_modules_list]),
+                "haskell_exposed_modules": depset([exposed_modules_list]),
+                # Forward the immediate (non-transitive) to make the UX nicer for
+                # building haskell_proto_library via the --aspects flag.  (It's a
+                # subset of haskell_transitive_deps, but the transitive data would
+                # clutter up the console.)
+                "haskell_library_files": depset([package_cache] + hi_dirs + shared_lib_archives),
+            },
+            library_info_output_groups(ctx, metadata.key, transitive_output.haskell),
+            compile_info_output_groups(
+                ctx = ctx,
+                metadata = metadata,
+                deps = collected_deps,
+                srcs_options = srcs_options,
+                hidden_modules = hidden_modules,
+                runfiles = runfiles.files,
+                wrapper_lib = lib.wrapper_lib if lib else None,
+            ),
+        )
+    )
+    haskell_info = HaskellInfo(
+        metadata = metadata,
+        module_names_ok = module_names_ok,
+        exposed_modules = exposed_modules,
+        transitive = transitive_output,
+    )
+    cc_info = [
         _create_ccinfo(
             ctx,
             toolchains,
             collected_deps,
+            cc_deps_lib,
             shared_lib_archives,
             ctx.attr.foreign_exports,
             lib.stub_headers,
         ),
-    ] if lib and hasattr(ctx.attr, "foreign_exports") and ctx.attr.foreign_exports else [])
+    ] if lib and hasattr(ctx.attr, "foreign_exports") and ctx.attr.foreign_exports else []
+    instrumented_files_info = [
+        coverage_common.instrumented_files_info(
+            ctx,
+            extensions = ["hs"],
+            source_attributes = ["srcs"],
+            dependency_attributes = ["deps"],
+        ),
+    ] if ctx.configuration.coverage_enabled else []
+
+    return (
+        [
+            default_info,
+            output_group_info,
+            haskell_info,
+        ] +
+        cc_info +
+        instrumented_files_info
+    )
 
 def _impl_library(ctx):
     """Implementation of the haskell_library rule.
@@ -453,7 +503,31 @@ def _impl_library(ctx):
         hidden_modules = ctx.attr.hidden_modules,
         reexported_modules = ctx.attr.reexported_modules,
         srcs_options = compile_srcs_options.get(ctx),
+        bundle_cc_deps = ctx.attr._bundle_cc_deps[BuildSettingInfo].value,
     )
+
+def _with_bundled_cc_deps_impl(settings, attr):
+    _ignore = (settings, attr)
+    return {"//tools/build_defs/haskell/private:bundle_cc_deps": True}
+
+with_bundled_cc_deps = transition(
+    implementation = _with_bundled_cc_deps_impl,
+    inputs = [],
+    outputs = ["//tools/build_defs/haskell/private:bundle_cc_deps"],
+)
+
+def _haskell_static_foreign_library_impl(ctx):
+    return [ctx.attr.library[0][CcInfo]]
+
+haskell_static_foreign_library = rule(
+    implementation = _haskell_static_foreign_library_impl,
+    attrs = {
+        "library": attr.label(cfg = with_bundled_cc_deps),
+        "_allowlist_function_transition": attr.label(
+            default = "//tools/allowlists/function_transition_allowlist",
+        ),
+    },
+)
 
 # Attributes that should be used by libraries, but *not* by binaries.
 haskell_library = rule(
@@ -515,6 +589,7 @@ manually.  It is used internally in cabal_haskell_package to generate
 <code>MIN_VERSION_*</code> macros.
 """,
             ),
+            "_bundle_cc_deps": attr.label(default = "//tools/build_defs/haskell/private:bundle_cc_deps"),
         },
     ),
     fragments = ["cpp"],
