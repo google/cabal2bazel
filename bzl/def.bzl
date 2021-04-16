@@ -29,6 +29,7 @@ load(
     _haskell_library = "haskell_library",
     _haskell_proto_aspect = "haskell_proto_aspect",
     _haskell_proto_library = "haskell_proto_library",
+    _haskell_static_foreign_library = "haskell_static_foreign_library",
 )
 
 haskell_binary = _haskell_binary
@@ -38,3 +39,4 @@ haskell_library = _haskell_library
 haskell_proto_aspect = _haskell_proto_aspect
 haskell_proto_library = _haskell_proto_library
 haskell_test = _haskell_test
+haskell_static_foreign_library = _haskell_static_foreign_library

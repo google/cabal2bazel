@@ -200,6 +200,8 @@ def collect_deps(dependencies):
           be needed by CPP.
         cpp_flags: Flags for running CPP in order to use the cc_headers when
           building the current rule.
+        immediate_cc_libs: A list of LibraryToLink objects of cc_library
+          rules that this target depends directly on.
         immediate_cc_dylibs: A list of Files of ".so" files for the cc_library
           rules that this target depends directly on.
         immediate_module_names_ok: A list of (empty) Files signifying that the
@@ -309,6 +311,8 @@ def collect_deps(dependencies):
         ),
         cc_headers = depset(transitive = [dep.compilation_context.headers for dep in cc_deps]),
         cpp_flags = [flag for dep in cc_deps for flag in get_compile_flags(dep)],
+        immediate_cc_libs = collections.uniq(immediate_cc_libs),
+        only_transitive_cc_libs = depset(transitive = [dep.transitive.cc.libs for dep in all_haskell]),
         immediate_cc_dylibs = collections.uniq(immediate_cc_dylibs),
         immediate_module_names_ok =
             [dep.module_names_ok for dep in all_haskell if dep.module_names_ok],
@@ -397,7 +401,7 @@ def get_dependencies(ctx):
     """
     return struct(
         deps = ctx.attr.deps,
-        plugins = ctx.attr.plugins,
+        plugins = getattr(ctx.attr, "plugins", []),
         default_deps = getattr(ctx.attr, "default_packages", []),
         faked_builddata_libs = builddata.get_faked_globals_libs(ctx),
     )
