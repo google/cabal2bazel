@@ -111,7 +111,7 @@ def create_shared_haskell_lib(ctx, toolchains, archive_name, lib, collected_deps
 
     Args:
       ctx: The current rule context
-      toolchains: A struct as returned by def.bzl:_get_toolchains.
+      toolchains: A struct as returned by def.bzl:get_toolchains.
       archive_name: The name of the output archive, minus the "lib"
         prefix and ".a" suffix.
       lib: The compiled library.
@@ -127,7 +127,8 @@ def create_shared_haskell_lib(ctx, toolchains, archive_name, lib, collected_deps
         is_linking_dynamic_library = True,
     )
 
-    # TODO: do we need to also include the version number when it's nontrivial?
+    # GHC expects the compiler version suffix in the .so file name.
+    # https://downloads.haskell.org/~ghc/latest/docs/html/users_guide/packages.html#building-a-package-from-haskell-source
     shared_lib = ctx.actions.declare_file("{}/lib{}-ghc{}.so".format(
         package.libdir(ctx),
         archive_name,

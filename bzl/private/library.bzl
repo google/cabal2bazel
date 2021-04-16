@@ -207,6 +207,7 @@ def _create_ccinfo(
         feature_configuration = toolchains.cc.feature_configuration,
         cc_toolchain = toolchains.cc.toolchain,
         public_hdrs = stub_headers,
+        grep_includes = ctx.file._grep_includes,
     )
 
     return CcInfo(
@@ -348,6 +349,7 @@ def _haskell_library_impl(
     if hasattr(ctx.files, "data"):
         runfiles = collect_runfiles(
             ctx = ctx,
+            files = [lib.mix] if lib and lib.mix else [],
             data = ctx.attr.data,
             deps = dependencies.deps,
         )
@@ -373,44 +375,43 @@ def _haskell_library_impl(
         cc = collected_deps.transitive.cc,
     )
 
-    return [
-        DefaultInfo(
-            # If the library has no srcs, put the exposed_modules_list in its output group
-            # so that its dependencies still get built.
-            files = depset(([lib.hi, lib.object] if lib else [exposed_modules_list]) +
-                           ([module_names_ok] if module_names_ok else [])),
-            runfiles = runfiles,
-        ),
-        OutputGroupInfo(
-            **dicts.add(
-                {
-                    "haskell_check": depset([lib.checked_hi if lib else exposed_modules_list]),
-                    "haskell_exposed_modules": depset([exposed_modules_list]),
-                    # Forward the immediate (non-transitive) to make the UX nicer for
-                    # building haskell_proto_library via the --aspects flag.  (It's a
-                    # subset of haskell_transitive_deps, but the transitive data would
-                    # clutter up the console.)
-                    "haskell_library_files": depset([package_cache] + hi_dirs + shared_lib_archives),
-                },
-                library_info_output_groups(ctx, metadata.key, transitive_output.haskell),
-                compile_info_output_groups(
-                    ctx = ctx,
-                    metadata = metadata,
-                    deps = collected_deps,
-                    srcs_options = srcs_options,
-                    hidden_modules = hidden_modules,
-                    runfiles = runfiles.files,
-                    wrapper_lib = lib.wrapper_lib if lib else None,
-                ),
-            )
-        ),
-        HaskellInfo(
-            metadata = metadata,
-            module_names_ok = module_names_ok,
-            exposed_modules = exposed_modules,
-            transitive = transitive_output,
-        ),
-    ] + ([
+    default_info = DefaultInfo(
+        # If the library has no srcs, put the exposed_modules_list in its output group
+        # so that its dependencies still get built.
+        files = depset(([lib.hi, lib.object, exposed_modules_list] if lib else [exposed_modules_list]) +
+                       ([module_names_ok] if module_names_ok else [])),
+        runfiles = runfiles,
+    )
+    output_group_info = OutputGroupInfo(
+        **dicts.add(
+            {
+                "haskell_check": depset([lib.checked_hi if lib else exposed_modules_list]),
+                "haskell_exposed_modules": depset([exposed_modules_list]),
+                # Forward the immediate (non-transitive) to make the UX nicer for
+                # building haskell_proto_library via the --aspects flag.  (It's a
+                # subset of haskell_transitive_deps, but the transitive data would
+                # clutter up the console.)
+                "haskell_library_files": depset([package_cache] + hi_dirs + shared_lib_archives),
+            },
+            library_info_output_groups(ctx, metadata.key, transitive_output.haskell),
+            compile_info_output_groups(
+                ctx = ctx,
+                metadata = metadata,
+                deps = collected_deps,
+                srcs_options = srcs_options,
+                hidden_modules = hidden_modules,
+                runfiles = runfiles.files,
+                wrapper_lib = lib.wrapper_lib if lib else None,
+            ),
+        )
+    )
+    haskell_info = HaskellInfo(
+        metadata = metadata,
+        module_names_ok = module_names_ok,
+        exposed_modules = exposed_modules,
+        transitive = transitive_output,
+    )
+    cc_info = [
         _create_ccinfo(
             ctx,
             toolchains,
@@ -419,7 +420,25 @@ def _haskell_library_impl(
             ctx.attr.foreign_exports,
             lib.stub_headers,
         ),
-    ] if lib and hasattr(ctx.attr, "foreign_exports") and ctx.attr.foreign_exports else [])
+    ] if lib and hasattr(ctx.attr, "foreign_exports") and ctx.attr.foreign_exports else []
+    instrumented_files_info = [
+        coverage_common.instrumented_files_info(
+            ctx,
+            extensions = ["hs"],
+            source_attributes = ["srcs"],
+            dependency_attributes = ["deps"],
+        ),
+    ] if ctx.configuration.coverage_enabled else []
+
+    return (
+        [
+            default_info,
+            output_group_info,
+            haskell_info,
+        ] +
+        cc_info +
+        instrumented_files_info
+    )
 
 def _impl_library(ctx):
     """Implementation of the haskell_library rule.

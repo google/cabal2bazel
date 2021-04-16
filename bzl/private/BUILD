@@ -23,12 +23,14 @@ bzl_library(
         "providers.bzl",
         "runfiles.bzl",
         "toolchains.bzl",
-        "@bazel_tools//tools/build_defs/cc:action_names.bzl",
-        "@bazel_tools//tools/cpp:toolchain_utils.bzl",
     ],
     deps = [
         "@bazel_skylib//lib:paths",
+        "@bazel_tools//tools/build_defs/cc:action_names",
+        "@bazel_tools//tools/build_defs/cc/contrib:cc_lto_backend",
         "//bzl:paths",
         "//bzl:settings",
+        "//bzl/private/builddata:builddata.bzl",
+        "@bazel_tools//tools/cpp:toolchain_utils",
     ],
 )

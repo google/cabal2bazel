@@ -16,6 +16,7 @@
 
 load("@bazel_skylib//lib:collections.bzl", "collections")
 load("@bazel_skylib//lib:dicts.bzl", "dicts")
+load("//bzl/private/builddata:builddata.bzl", "builddata")
 load("//bzl/private:cc.bzl", "get_compile_flags")
 load(
     "//bzl/private:default_packages.bzl",
@@ -236,6 +237,13 @@ def collect_deps(dependencies):
         for lib in immediate_cc_libs
         if lib.dynamic_library
     ]
+    if immediate_cc_dylibs:
+        immediate_cc_libs += dependencies.faked_builddata_libs
+        immediate_cc_dylibs += [
+            lib.dynamic_library
+            for lib in dependencies.faked_builddata_libs
+            if lib.dynamic_library
+        ]
 
     # Note: plugins, like deps, need to be linked into the final binary.  As a
     # result, we combine both into the transitive struct.
@@ -319,7 +327,7 @@ def fix_aspect_providers(lib_providers):
     # The DefaultInfo provider can't be returned from aspects.
     return [p for p in lib_providers if not hasattr(p, "files")]
 
-dependency_attrs = {
+dependency_attrs = dicts.add(builddata.compile_attrs, {
     "deps": attr.label_list(
         providers = [[HaskellInfo], [CcInfo]],
         doc = """
@@ -348,7 +356,7 @@ because plugins may splice definitions from themselves into the compilation
 result.
 """,
     ),
-}
+})
 
 default_packages_attrs = {
     "default_packages": attr.label_list(
@@ -383,11 +391,15 @@ def get_dependencies(ctx):
      - plugins: A list of targets declared as "plugins" of this rule.
      - default_deps: A list of targets which are implicit "default"
        dependencies of all Haskell rules.
+     - faked_builddata_libs: A list of LibraryToLink providers, used to help link
+       against builddata libraries with using the "builddata_globals_faked"
+       cc_library.
     """
     return struct(
         deps = ctx.attr.deps,
         plugins = ctx.attr.plugins,
         default_deps = getattr(ctx.attr, "default_packages", []),
+        faked_builddata_libs = builddata.get_faked_globals_libs(ctx),
     )
 
 def simple_dependencies(deps):

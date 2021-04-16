@@ -9,6 +9,7 @@ haskell_library(
         "Lib.hs",
         "Sub/Lib.hs",
     ],
+    features = ["-parse_headers"],
     foreign_exports = [
         "Lib",
         "Sub.Lib",
@@ -36,6 +37,7 @@ cc_library(
 haskell_library(
     name = "CDep",
     srcs = ["CDep.hs"],
+    features = ["-parse_headers"],
     foreign_exports = [
         "CDep",
     ],
